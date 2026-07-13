@@ -115,11 +115,12 @@ export function summarize(transactions, settings) {
       const value = transactionValues(t, settings);
       sum.gralats += value.gralats;
       sum.grossTro += value.grossTro;
+      sum.shovels += t.type === "shovel" ? t.quantity : 0;
       sum.deduction += value.deduction;
       sum.netTro += value.netTro;
       return sum;
     },
-    { gralats: 0, grossTro: 0, deduction: 0, netTro: 0 },
+    { gralats: 0, grossTro: 0, shovels: 0, deduction: 0, netTro: 0 },
   );
 }
 export function toPhp(tro, settings) {

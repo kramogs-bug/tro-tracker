@@ -333,7 +333,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           </p>
         </aside>
       </section>
-      <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <Stat
           label="Total Gralats"
           value={format(total.gralats)}
@@ -343,6 +343,21 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           label="Gross TRO"
           value={format(total.grossTro)}
           icon={<Pickaxe size={19} />}
+        />
+        <Stat
+          label="Shovels used"
+          value={format(total.shovels)}
+          icon={<Pickaxe size={19} />}
+        />
+        <Stat
+          label="Shovel value"
+          value={`${format(total.deduction)} TRO`}
+          icon={<Pickaxe size={19} />}
+        />
+        <Stat
+          label="Shovel PHP"
+          value={`₱${format(toPhp(total.deduction, state.settings))}`}
+          icon={<Banknote size={19} />}
         />
         <Stat
           label="Net TRO"
@@ -378,6 +393,13 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                       )
                       .join(" · ") || "Shovels only"}
                   </p>
+                  {summary.shovels > 0 ? (
+                    <p className="mt-1 text-xs font-bold text-red-700">
+                      {format(summary.shovels)} shovels ={" "}
+                      {format(summary.deduction)} TRO = ₱
+                      {format(toPhp(summary.deduction, state.settings))}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-3">
                   <strong>{format(summary.netTro)} TRO</strong>
@@ -436,13 +458,25 @@ export default function App() {
         (sum, row) => ({
           gralats: sum.gralats + row.summary.gralats,
           grossTro: sum.grossTro + row.summary.grossTro,
+          shovels: sum.shovels + row.summary.shovels,
           deduction: sum.deduction + row.summary.deduction,
           netTro: sum.netTro + row.summary.netTro,
+          shovelPhp:
+            sum.shovelPhp +
+            toPhp(row.summary.deduction, row.player.settings || state.settings),
           php:
             sum.php +
             toPhp(row.summary.netTro, row.player.settings || state.settings),
         }),
-        { gralats: 0, grossTro: 0, deduction: 0, netTro: 0, php: 0 },
+        {
+          gralats: 0,
+          grossTro: 0,
+          shovels: 0,
+          deduction: 0,
+          netTro: 0,
+          php: 0,
+          shovelPhp: 0,
+        },
       ),
     [playerSummaries, state.settings],
   );
@@ -517,7 +551,7 @@ export default function App() {
                 <UserPlus size={17} /> Add player
               </button>
             </header>
-            <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7">
               <Stat
                 label="Players"
                 value={state.players.length}
@@ -527,6 +561,21 @@ export default function App() {
                 label="Gralats"
                 value={format(total.gralats)}
                 icon={<Plus size={19} />}
+              />
+              <Stat
+                label="Shovels used"
+                value={format(total.shovels)}
+                icon={<Pickaxe size={19} />}
+              />
+              <Stat
+                label="Shovel TRO"
+                value={format(total.deduction)}
+                icon={<Pickaxe size={19} />}
+              />
+              <Stat
+                label="Shovel PHP"
+                value={`₱${format(total.shovelPhp)}`}
+                icon={<Banknote size={19} />}
               />
               <Stat
                 label="Net TRO"
@@ -565,7 +614,13 @@ export default function App() {
                             {format(playerTotal.netTro)} TRO
                           </strong>
                           <small>
-                            ₱{format(toPhp(playerTotal.netTro, player.settings || state.settings))}
+                            ₱
+                            {format(
+                              toPhp(
+                                playerTotal.netTro,
+                                player.settings || state.settings,
+                              ),
+                            )}
                           </small>
                         </span>
                       </div>
@@ -660,9 +715,18 @@ export default function App() {
         <RatioForm
           settings={selected?.settings || state.settings}
           onSave={(settings) => {
-            setState((current) => selected
-              ? { ...current, players: current.players.map((player) => player.id === selected.id ? { ...player, settings } : player) }
-              : { ...current, settings });
+            setState((current) =>
+              selected
+                ? {
+                    ...current,
+                    players: current.players.map((player) =>
+                      player.id === selected.id
+                        ? { ...player, settings }
+                        : player,
+                    ),
+                  }
+                : { ...current, settings },
+            );
             setModal(null);
           }}
           onClose={() => setModal(null)}
