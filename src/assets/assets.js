@@ -1,0 +1,24 @@
+import aero from './aero-nobg.png';
+import aster from './aster-nobg.png';
+import bottle from './bottle-nobg.png';
+import carnation from './carnation-nobg.png';
+import crabshell from './crabshell-nobg.png';
+import mineral from './mineral-nobg.png';
+import mum from './mum-nobg.png';
+import news from './news-nobg.png';
+import paper from './paper-nobg.png';
+import rose from './rose-nobg.png';
+import sandDollar from './sand-dollar-nobg.png';
+import scallop from './scallop-nobg.png';
+import star from './star-nobg.png';
+import tires from './tires-nobg.png';
+import tro from './tro-nobg.png';
+import tulip from './tulip-nobg.png';
+import gold from './gold-nobg.png';
+import diamond from './diamond-nobg.png';
+import ruby from './ruby-nobg.png';
+import sapphire from './sapphire-nobg.png';
+import emerald from './emerald-nobg.png';
+import mushrooms from './mushrooms.png';
+
+export const sellablesIcons = { aero, aster, bottle, carnation, crabshell, mineral, mum, news, paper, rose, sandDollar, scallop, star, tires, tro, tulip, gold, diamond, ruby, sapphire, emerald, mushrooms };
