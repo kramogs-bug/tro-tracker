@@ -24,6 +24,7 @@ import {
   localDate,
   saveState,
   summarize,
+  summarizePeriods,
   toPhp,
 } from "./tracker.js";
 
@@ -171,6 +172,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
     .filter((entry) => entry.playerId === player.id)
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
   const total = summarize(records, playerSettings);
+  const periodProfits = summarizePeriods(records, playerSettings);
   const previewGralats = SHELL_ITEMS.reduce(
     (sum, item) => sum + (Number(quantities[item.name]) || 0) * item.price,
     0,
@@ -332,6 +334,35 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
             ₱{format(toPhp(previewTro - previewDeduction, state.settings))}
           </p>
         </aside>
+      </section>
+      <section className="mt-6">
+        <h2 className="text-xl font-bold">Profit summary</h2>
+        <p className="mt-1 text-sm text-[#659287]">
+          Net profit for {player.name} only, after shovel deductions.
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          {[
+            ["Today", periodProfits.daily],
+            ["This week", periodProfits.weekly],
+            ["This month", periodProfits.monthly],
+          ].map(([label, profit]) => (
+            <article
+              key={label}
+              className="rounded-2xl bg-[#29453E] p-5 text-white"
+            >
+              <p className="text-sm font-bold text-[#B1D3B9]">{label}</p>
+              <p className="mt-2 text-2xl font-bold">
+                {format(profit.netTro)} TRO
+              </p>
+              <p className="mt-1 text-lg">
+                ₱{format(toPhp(profit.netTro, playerSettings))}
+              </p>
+              <p className="mt-3 text-xs text-[#B1D3B9]">
+                {format(profit.gralats)} G · {format(profit.shovels)} shovels
+              </p>
+            </article>
+          ))}
+        </div>
       </section>
       <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <Stat

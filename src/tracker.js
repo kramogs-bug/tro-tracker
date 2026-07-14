@@ -123,6 +123,33 @@ export function summarize(transactions, settings) {
     { gralats: 0, grossTro: 0, shovels: 0, deduction: 0, netTro: 0 },
   );
 }
+
+export function summarizePeriods(transactions, settings, now = new Date()) {
+  const today = localDate(now);
+  const monday = new Date(now);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const weekStart = localDate(monday);
+  const monthStart = `${today.slice(0, 7)}-01`;
+  return {
+    daily: summarize(
+      transactions.filter((entry) => entry.date === today),
+      settings,
+    ),
+    weekly: summarize(
+      transactions.filter(
+        (entry) => entry.date >= weekStart && entry.date <= today,
+      ),
+      settings,
+    ),
+    monthly: summarize(
+      transactions.filter(
+        (entry) => entry.date >= monthStart && entry.date <= today,
+      ),
+      settings,
+    ),
+  };
+}
+
 export function toPhp(tro, settings) {
   return (tro / settings.phpTro) * settings.phpAmount;
 }
