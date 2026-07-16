@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Banknote,
+  Cloud,
+  CloudOff,
   Download,
   FileDown,
+  LogOut,
   Pickaxe,
   Plus,
+  RefreshCw,
   Save,
   Settings,
   Trash2,
@@ -13,6 +17,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import AccountModal from "./AccountModal.jsx";
 import { SHELL_ITEMS } from "./sellablesData.js";
 import {
   createId,
@@ -22,11 +27,13 @@ import {
   importBackup,
   loadState,
   localDate,
+  parseQuantityExpression,
   saveState,
   summarize,
   summarizePeriods,
   toPhp,
 } from "./tracker.js";
+import { useCloudTracker } from "./useCloudTracker.js";
 
 const input =
   "w-full rounded-xl border border-[#B1D3B9] bg-white px-3 py-2.5 text-center font-bold outline-none focus:border-[#527A70]";
@@ -36,6 +43,8 @@ const soft =
   "inline-flex items-center justify-center gap-2 rounded-xl border border-[#B1D3B9] bg-white px-4 py-2.5 text-sm font-bold hover:bg-[#F2F8ED]";
 const emptyQuantities = () =>
   Object.fromEntries(SHELL_ITEMS.map((item) => [item.name, ""]));
+const cleanExpression = (value) =>
+  String(value).replace(/[^\d+\-*/().\s]/g, "");
 
 function download(content, name, type) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -77,6 +86,28 @@ function Stat({ label, value, icon }) {
       <p className="mt-3 text-xs font-bold uppercase text-[#659287]">{label}</p>
       <p className="mt-1 truncate text-xl font-bold">{value}</p>
     </article>
+  );
+}
+
+function CloudStatus({ cloud }) {
+  const online =
+    cloud.session &&
+    cloud.syncStatus !== "offline" &&
+    cloud.syncStatus !== "error";
+  return (
+    <span
+      className={`hidden max-w-56 items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold sm:inline-flex ${online ? "bg-[#E6F2DD] text-[#527A70]" : "bg-white text-[#659287]"}`}
+      title={cloud.syncMessage}
+    >
+      {online ? <Cloud size={15} /> : <CloudOff size={15} />}
+      <span className="truncate">
+        {cloud.session
+          ? cloud.syncStatus === "saved"
+            ? cloud.session.user.email
+            : cloud.syncMessage || "Cloud account"
+          : "Local only"}
+      </span>
+    </span>
   );
 }
 function PlayerForm({ onSave, onClose }) {
@@ -162,6 +193,79 @@ function RatioForm({ settings, onSave, onClose }) {
   );
 }
 
+function VisibleRatioEditor({ settings, onSave }) {
+  const [values, setValues] = useState(() =>
+    Object.fromEntries(
+      Object.entries(settings).map(([key, value]) => [key, String(value)]),
+    ),
+  );
+  useEffect(() => {
+    setValues(
+      Object.fromEntries(
+        Object.entries(settings).map(([key, value]) => [key, String(value)]),
+      ),
+    );
+  }, [settings]);
+  const fields = [
+    ["gralatsPerTro", "Gralats / TRO"],
+    ["shovelTro", "TRO / shovel"],
+    ["phpTro", "TRO amount"],
+    ["phpAmount", "PHP value"],
+  ];
+  return (
+    <form
+      className="mt-5 rounded-2xl border-2 border-[#88BDA4] bg-white p-4 shadow-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const next = Object.fromEntries(
+          Object.entries(values).map(([key, value]) => [key, Number(value)]),
+        );
+        if (
+          Object.values(next).every(
+            (value) => Number.isFinite(value) && value > 0,
+          )
+        )
+          onSave(next);
+      }}
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="flex items-center gap-2 font-bold">
+            <Settings size={17} /> {"Player conversion ratios"}
+          </p>
+          <p className="mt-1 text-xs text-[#659287]">
+            These ratios apply only to this player's output.
+          </p>
+        </div>
+        <button className={primary}>
+          <Save size={15} /> Save ratios
+        </button>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {fields.map(([key, label]) => (
+          <label key={key} className="text-xs font-bold text-[#527A70]">
+            {label}
+            <input
+              required
+              type="number"
+              min="0.01"
+              step="any"
+              value={values[key]}
+              onChange={(event) =>
+                setValues((current) => ({
+                  ...current,
+                  [key]: event.target.value,
+                }))
+              }
+              className={`mt-1.5 ${input}`}
+            />
+          </label>
+        ))}
+      </div>
+    </form>
+  );
+}
+
 function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   const playerSettings = player.settings || rawState.settings;
   const state = { ...rawState, settings: playerSettings };
@@ -173,24 +277,40 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
   const total = summarize(records, playerSettings);
   const periodProfits = summarizePeriods(records, playerSettings);
+  const parsedQuantities = Object.fromEntries(
+    SHELL_ITEMS.map((item) => [
+      item.name,
+      parseQuantityExpression(quantities[item.name]),
+    ]),
+  );
+  const parsedShovels = parseQuantityExpression(shovels);
+  const hasInvalidExpression =
+    Object.entries(quantities).some(
+      ([name, value]) => value.trim() && parsedQuantities[name] === null,
+    ) ||
+    (shovels.trim() && parsedShovels === null);
   const previewGralats = SHELL_ITEMS.reduce(
-    (sum, item) => sum + (Number(quantities[item.name]) || 0) * item.price,
+    (sum, item) => sum + (parsedQuantities[item.name] || 0) * item.price,
     0,
   );
   const previewTro = previewGralats / playerSettings.gralatsPerTro;
-  const previewDeduction = (Number(shovels) || 0) * playerSettings.shovelTro;
+  const previewDeduction = (parsedShovels || 0) * playerSettings.shovelTro;
   const saveBatch = () => {
+    if (hasInvalidExpression) {
+      setFeedback("May invalid o incomplete expression. Example: 100+200");
+      return;
+    }
     const timestamp = new Date().toISOString();
     const date = localDate();
     const shellRecords = SHELL_ITEMS.flatMap((item) =>
-      Number(quantities[item.name]) > 0
+      parsedQuantities[item.name] > 0
         ? [
             {
               id: createId(),
               playerId: player.id,
               type: "sellable",
               itemName: item.name,
-              quantity: Number(quantities[item.name]),
+              quantity: parsedQuantities[item.name],
               unitPrice: item.price,
               date,
               note: "",
@@ -200,14 +320,14 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         : [],
     );
     const shovelRecord =
-      Number(shovels) > 0
+      parsedShovels > 0
         ? [
             {
               id: createId(),
               playerId: player.id,
               type: "shovel",
               itemName: "",
-              quantity: Number(shovels),
+              quantity: parsedShovels,
               unitPrice: 0,
               date,
               note: "",
@@ -250,11 +370,25 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           Player added: {displayTimestamp(player.createdAt)}
         </p>
       </header>
+      <VisibleRatioEditor
+        settings={playerSettings}
+        onSave={(settings) => {
+          setState((current) => ({
+            ...current,
+            players: current.players.map((currentPlayer) =>
+              currentPlayer.id === player.id
+                ? { ...currentPlayer, settings }
+                : currentPlayer,
+            ),
+          }));
+          setFeedback("Player ratios updated.");
+        }}
+      />
       <section className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="rounded-2xl border border-[#B1D3B9] bg-white p-4 sm:p-6">
           <h2 className="text-lg font-bold">Shell quantities</h2>
           <p className="mt-1 text-sm text-[#659287]">
-            Input ang daily total sa bawat shell.
+            Enter a number or expression such as 100+200.
           </p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {SHELL_ITEMS.map((item) => (
@@ -272,16 +406,14 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                   <small className="text-[#659287]">{item.price} G each</small>
                 </span>
                 <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  inputMode="numeric"
-                  placeholder="0"
+                  type="text"
+                  inputMode="text"
+                  placeholder="0 or 100+200"
                   value={quantities[item.name]}
                   onChange={(event) =>
                     setQuantities((current) => ({
                       ...current,
-                      [item.name]: event.target.value,
+                      [item.name]: cleanExpression(event.target.value),
                     }))
                   }
                   className={input}
@@ -301,13 +433,13 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               </small>
             </span>
             <input
-              type="number"
-              min="0"
-              step="1"
-              inputMode="numeric"
-              placeholder="0"
+              type="text"
+              inputMode="text"
+              placeholder="0 or 100+200"
               value={shovels}
-              onChange={(event) => setShovels(event.target.value)}
+              onChange={(event) =>
+                setShovels(cleanExpression(event.target.value))
+              }
               className={input}
               aria-label="Shovel quantity"
             />
@@ -325,7 +457,10 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           <p className="text-sm text-[#E6F2DD]">Live calculator</p>
           <p className="mt-2 text-3xl font-bold">{format(previewGralats)} G</p>
           <div className="my-4 border-t border-white/20" />
-          <p>{format(previewTro)} gross TRO</p>
+          <p className="font-bold">{format(previewTro)} gross TRO</p>
+          <p className="text-sm text-[#E6F2DD]">
+            ₱{format(toPhp(previewTro, playerSettings))} before shovel
+          </p>
           <p className="text-red-100">−{format(previewDeduction)} shovel TRO</p>
           <p className="mt-3 text-2xl font-bold">
             {format(previewTro - previewDeduction)} net TRO
@@ -338,7 +473,8 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
       <section className="mt-6">
         <h2 className="text-xl font-bold">Profit summary</h2>
         <p className="mt-1 text-sm text-[#659287]">
-          Net profit for {player.name} only, after shovel deductions.
+          Gross profit before shovel and net profit after shovel for{" "}
+          {player.name} only.
         </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           {[
@@ -351,7 +487,17 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               className="rounded-2xl bg-[#29453E] p-5 text-white"
             >
               <p className="text-sm font-bold text-[#B1D3B9]">{label}</p>
-              <p className="mt-2 text-2xl font-bold">
+              <p className="mt-3 text-xs uppercase text-[#B1D3B9]">
+                Before shovel
+              </p>
+              <p className="mt-1 text-lg font-bold">
+                {format(profit.grossTro)} TRO · ₱
+                {format(toPhp(profit.grossTro, playerSettings))}
+              </p>
+              <p className="mt-3 text-xs uppercase text-[#B1D3B9]">
+                After shovel
+              </p>
+              <p className="mt-1 text-2xl font-bold">
                 {format(profit.netTro)} TRO
               </p>
               <p className="mt-1 text-lg">
@@ -364,7 +510,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           ))}
         </div>
       </section>
-      <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat
           label="Total Gralats"
           value={format(total.gralats)}
@@ -374,6 +520,11 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           label="Gross TRO"
           value={format(total.grossTro)}
           icon={<Pickaxe size={19} />}
+        />
+        <Stat
+          label="Gross PHP before shovel"
+          value={`₱${format(toPhp(total.grossTro, playerSettings))}`}
+          icon={<Banknote size={19} />}
         />
         <Stat
           label="Shovels used"
@@ -470,7 +621,9 @@ export default function App() {
   const [state, setState] = useState(loadState);
   const [selectedId, setSelectedId] = useState(null);
   const [modal, setModal] = useState(null);
+  const [accountOpen, setAccountOpen] = useState(false);
   const importRef = useRef(null);
+  const cloud = useCloudTracker(state, setState);
   useEffect(() => saveState(state), [state]);
   const playerSummaries = useMemo(
     () =>
@@ -553,9 +706,49 @@ export default function App() {
             </span>
             <strong>TRO Tracker</strong>
           </button>
-          <button onClick={() => setModal("ratios")} className={soft}>
-            <Settings size={17} /> Ratios
-          </button>
+          <div className="flex items-center gap-2">
+            <CloudStatus cloud={cloud} />
+            {cloud.session ? (
+              <>
+                <button
+                  type="button"
+                  onClick={cloud.syncNow}
+                  className={soft}
+                  title={cloud.session.user.email}
+                >
+                  <RefreshCw size={16} />
+                  <span className="hidden md:inline">Sync</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    confirm(
+                      "Sign out? Your current data will remain saved locally on this device.",
+                    ) && cloud.signOut()
+                  }
+                  className={soft}
+                >
+                  <LogOut size={16} />
+                  <span className="hidden md:inline">Sign out</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAccountOpen(true)}
+                className={primary}
+              >
+                <Cloud size={16} />
+                <span className="hidden sm:inline">Cloud account</span>
+              </button>
+            )}
+            {!selected ? (
+              <button onClick={() => setModal("ratios")} className={soft}>
+                <Settings size={17} />
+                <span className="hidden md:inline">Default ratios</span>
+              </button>
+            ) : null}
+          </div>
         </div>
       </nav>
       <div className="mx-auto max-w-7xl px-4 py-7">
@@ -762,6 +955,9 @@ export default function App() {
           }}
           onClose={() => setModal(null)}
         />
+      ) : null}
+      {accountOpen ? (
+        <AccountModal onClose={() => setAccountOpen(false)} />
       ) : null}
     </main>
   );

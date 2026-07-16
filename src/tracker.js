@@ -26,6 +26,65 @@ export function format(value, digits = 2) {
     maximumFractionDigits: digits,
   });
 }
+
+export function parseQuantityExpression(value) {
+  const source = String(value ?? "")
+    .replaceAll(",", "")
+    .trim();
+  if (!source) return 0;
+  if (!/^[\d+\-*/().\s]+$/.test(source)) return null;
+  let index = 0;
+  const spaces = () => {
+    while (/\s/.test(source[index] || "")) index += 1;
+  };
+  const primary = () => {
+    spaces();
+    if (source[index] === "(") {
+      index += 1;
+      const result = sum();
+      spaces();
+      if (source[index] !== ")") throw new Error("Missing parenthesis");
+      index += 1;
+      return result;
+    }
+    const match = source.slice(index).match(/^\d+(?:\.\d+)?/);
+    if (!match) throw new Error("Expected number");
+    index += match[0].length;
+    return Number(match[0]);
+  };
+  const product = () => {
+    let result = primary();
+    while (true) {
+      spaces();
+      const operator = source[index];
+      if (operator !== "*" && operator !== "/") return result;
+      index += 1;
+      const right = primary();
+      if (operator === "/" && right === 0) throw new Error("Division by zero");
+      result = operator === "*" ? result * right : result / right;
+    }
+  };
+  function sum() {
+    let result = product();
+    while (true) {
+      spaces();
+      const operator = source[index];
+      if (operator !== "+" && operator !== "-") return result;
+      index += 1;
+      const right = product();
+      result = operator === "+" ? result + right : result - right;
+    }
+  }
+  try {
+    const result = sum();
+    spaces();
+    if (index !== source.length || !Number.isFinite(result) || result < 0)
+      return null;
+    return Math.floor(result);
+  } catch {
+    return null;
+  }
+}
 export function loadState() {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY));
