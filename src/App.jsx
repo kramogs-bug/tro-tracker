@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Banknote,
+  CalendarClock,
   Cloud,
   CloudOff,
   Download,
   FileDown,
   LogOut,
   Pickaxe,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -27,6 +29,7 @@ import {
   importBackup,
   loadState,
   localDate,
+  localDateTimeInput,
   parseQuantityExpression,
   saveState,
   summarize,
@@ -60,14 +63,16 @@ function displayTimestamp(value) {
     timeStyle: "short",
   });
 }
-function Modal({ title, onClose, children }) {
+function Modal({ title, onClose, children, wide = false }) {
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-[#29453E]/60 p-3"
       role="dialog"
       aria-modal="true"
     >
-      <section className="w-full max-w-lg rounded-2xl bg-[#F8FBF5] p-5">
+      <section
+        className={`max-h-[calc(100vh-1.5rem)] w-full overflow-y-auto rounded-2xl bg-[#F8FBF5] p-5 ${wide ? "max-w-3xl" : "max-w-lg"}`}
+      >
         <header className="flex items-center justify-between">
           <h2 className="text-xl font-bold">{title}</h2>
           <button onClick={onClose} aria-label="Close">
@@ -90,6 +95,13 @@ function Stat({ label, value, icon }) {
 }
 
 function CloudStatus({ cloud }) {
+  if (!cloud.authReady) {
+    return (
+      <span className="hidden items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-[#659287] sm:inline-flex">
+        <RefreshCw size={15} className="animate-spin" /> Restoring session…
+      </span>
+    );
+  }
   const online =
     cloud.session &&
     cloud.syncStatus !== "offline" &&
@@ -266,11 +278,194 @@ function VisibleRatioEditor({ settings, onSave }) {
   );
 }
 
+function EditBatchModal({ batch, player, onSave, onClose }) {
+  const [timestamp, setTimestamp] = useState(() =>
+    localDateTimeInput(batch[0].createdAt),
+  );
+  const [quantities, setQuantities] = useState(() => {
+    const values = emptyQuantities();
+    batch.forEach((entry) => {
+      if (entry.type === "sellable" && entry.itemName in values) {
+        const current = Number(values[entry.itemName]) || 0;
+        values[entry.itemName] = String(current + entry.quantity);
+      }
+    });
+    return values;
+  });
+  const [shovels, setShovels] = useState(() =>
+    String(
+      batch.reduce(
+        (sum, entry) =>
+          sum + (entry.type === "shovel" ? entry.quantity : 0),
+        0,
+      ) || "",
+    ),
+  );
+  const [feedback, setFeedback] = useState("");
+  const parsedQuantities = Object.fromEntries(
+    SHELL_ITEMS.map((item) => [
+      item.name,
+      parseQuantityExpression(quantities[item.name]),
+    ]),
+  );
+  const parsedShovels = parseQuantityExpression(shovels);
+
+  const submit = (event) => {
+    event.preventDefault();
+    const selectedTime = new Date(timestamp);
+    const invalidExpression =
+      Object.entries(quantities).some(
+        ([name, value]) => value.trim() && parsedQuantities[name] === null,
+      ) || (shovels.trim() && parsedShovels === null);
+    if (Number.isNaN(selectedTime.getTime())) {
+      setFeedback("Pumili ng valid na date at time.");
+      return;
+    }
+    if (invalidExpression) {
+      setFeedback("May invalid o incomplete expression. Example: 100+200");
+      return;
+    }
+
+    const createdAt = selectedTime.toISOString();
+    const date = localDate(selectedTime);
+    const batchId = batch[0].batchId;
+    const existing = new Map();
+    batch.forEach((entry) => {
+      const key = `${entry.type}:${entry.itemName}`;
+      if (!existing.has(key)) existing.set(key, entry);
+    });
+    const shellRecords = SHELL_ITEMS.flatMap((item) => {
+      const quantity = parsedQuantities[item.name] || 0;
+      if (!quantity) return [];
+      const previous = existing.get(`sellable:${item.name}`);
+      return [
+        {
+          id: previous?.id || createId(),
+          batchId,
+          playerId: player.id,
+          type: "sellable",
+          itemName: item.name,
+          quantity,
+          unitPrice: item.price,
+          date,
+          note: previous?.note || "",
+          createdAt,
+        },
+      ];
+    });
+    const previousShovel = existing.get("shovel:");
+    const shovelRecords =
+      parsedShovels > 0
+        ? [
+            {
+              id: previousShovel?.id || createId(),
+              batchId,
+              playerId: player.id,
+              type: "shovel",
+              itemName: "",
+              quantity: parsedShovels,
+              unitPrice: 0,
+              date,
+              note: previousShovel?.note || "",
+              createdAt,
+            },
+          ]
+        : [];
+    const preservedTro = batch
+      .filter((entry) => entry.type === "tro")
+      .map((entry) => ({ ...entry, batchId, date, createdAt }));
+    const records = [...shellRecords, ...shovelRecords, ...preservedTro];
+    if (!records.length) {
+      setFeedback("Maglagay ng kahit isang shell quantity o shovel.");
+      return;
+    }
+    onSave(records);
+  };
+
+  return (
+    <Modal title="Edit saved entry" onClose={onClose} wide>
+      <form className="mt-5" onSubmit={submit}>
+        <label className="block text-sm font-bold">
+          Entry date &amp; time
+          <input
+            required
+            type="datetime-local"
+            step="60"
+            value={timestamp}
+            onChange={(event) => setTimestamp(event.target.value)}
+            className={`mt-2 ${input} text-left`}
+          />
+          <span className="mt-1 block text-xs font-normal text-[#659287]">
+            This date controls the daily, weekly, and monthly totals.
+          </span>
+        </label>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          {SHELL_ITEMS.map((item) => (
+            <label
+              key={item.name}
+              className="grid grid-cols-[2.5rem_1fr_7rem] items-center gap-3 rounded-xl border border-[#E6F2DD] bg-white p-3"
+            >
+              <img src={item.image} alt="" className="size-10 object-contain" />
+              <span className="text-sm font-bold">{item.name}</span>
+              <input
+                type="text"
+                inputMode="text"
+                placeholder="0 or 100+200"
+                value={quantities[item.name]}
+                onChange={(event) =>
+                  setQuantities((current) => ({
+                    ...current,
+                    [item.name]: cleanExpression(event.target.value),
+                  }))
+                }
+                className={input}
+                aria-label={`${item.name} saved quantity`}
+              />
+            </label>
+          ))}
+        </div>
+        <label className="mt-3 grid grid-cols-[2.5rem_1fr_7rem] items-center gap-3 rounded-xl border border-[#E6F2DD] bg-white p-3">
+          <span className="grid size-10 place-items-center rounded-lg bg-[#E6F2DD]">
+            <Pickaxe size={18} />
+          </span>
+          <span className="text-sm font-bold">Shovels</span>
+          <input
+            type="text"
+            inputMode="text"
+            placeholder="0 or 100+200"
+            value={shovels}
+            onChange={(event) =>
+              setShovels(cleanExpression(event.target.value))
+            }
+            className={input}
+            aria-label="Saved shovel quantity"
+          />
+        </label>
+        {feedback ? (
+          <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">
+            {feedback}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className={soft}>
+            Cancel
+          </button>
+          <button className={primary}>
+            <Save size={16} /> Save changes
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   const playerSettings = player.settings || rawState.settings;
   const state = { ...rawState, settings: playerSettings };
   const [quantities, setQuantities] = useState(emptyQuantities);
   const [shovels, setShovels] = useState("");
+  const [entryTimestamp, setEntryTimestamp] = useState(localDateTimeInput);
+  const [editingBatchId, setEditingBatchId] = useState(null);
   const [feedback, setFeedback] = useState("");
   const records = state.transactions
     .filter((entry) => entry.playerId === player.id)
@@ -300,13 +495,20 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
       setFeedback("May invalid o incomplete expression. Example: 100+200");
       return;
     }
-    const timestamp = new Date().toISOString();
-    const date = localDate();
+    const selectedTime = new Date(entryTimestamp);
+    if (Number.isNaN(selectedTime.getTime())) {
+      setFeedback("Pumili ng valid na date at time.");
+      return;
+    }
+    const timestamp = selectedTime.toISOString();
+    const date = localDate(selectedTime);
+    const batchId = createId();
     const shellRecords = SHELL_ITEMS.flatMap((item) =>
       parsedQuantities[item.name] > 0
         ? [
             {
               id: createId(),
+              batchId,
               playerId: player.id,
               type: "sellable",
               itemName: item.name,
@@ -324,6 +526,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         ? [
             {
               id: createId(),
+              batchId,
               playerId: player.id,
               type: "shovel",
               itemName: "",
@@ -345,14 +548,35 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
     }));
     setQuantities(emptyQuantities());
     setShovels("");
+    setEntryTimestamp(localDateTimeInput());
     setFeedback(`Saved: ${displayTimestamp(timestamp)}`);
   };
-  const batches = Object.values(
-    records.reduce((groups, record) => {
-      (groups[record.createdAt] ||= []).push(record);
-      return groups;
-    }, {}),
+  const batches = Array.from(
+    records
+      .reduce((groups, record) => {
+        const batch = groups.get(record.batchId) || [];
+        batch.push(record);
+        groups.set(record.batchId, batch);
+        return groups;
+      }, new Map())
+      .values(),
   );
+  const editingBatch =
+    batches.find((batch) => batch[0].batchId === editingBatchId) || null;
+  const replaceBatch = (nextRecords) => {
+    setState((current) => ({
+      ...current,
+      transactions: [
+        ...nextRecords,
+        ...current.transactions.filter(
+          (entry) =>
+            entry.playerId !== player.id || entry.batchId !== editingBatchId,
+        ),
+      ],
+    }));
+    setEditingBatchId(null);
+    setFeedback("Saved entry updated.");
+  };
   return (
     <>
       <button
@@ -444,8 +668,24 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               aria-label="Shovel quantity"
             />
           </label>
+          <label className="mt-4 block rounded-xl border border-[#E6F2DD] bg-[#F8FBF5] p-3 text-sm font-bold">
+            <span className="flex items-center gap-2">
+              <CalendarClock size={17} /> Entry date &amp; time
+            </span>
+            <input
+              required
+              type="datetime-local"
+              step="60"
+              value={entryTimestamp}
+              onChange={(event) => setEntryTimestamp(event.target.value)}
+              className={`mt-2 ${input} text-left`}
+            />
+            <span className="mt-1 block text-xs font-normal text-[#659287]">
+              Change this when adding quantities for an earlier date.
+            </span>
+          </label>
           <button onClick={saveBatch} className={`mt-5 w-full ${primary}`}>
-            <Save size={17} /> Save daily entry
+            <Save size={17} /> Save entry
           </button>
           {feedback ? (
             <p className="mt-3 text-center text-sm font-bold text-[#527A70]">
@@ -556,16 +796,19 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         <h2 className="text-xl font-bold">Saved timestamps</h2>
         <div className="mt-4 space-y-3">
           {batches.map((batch) => {
-            const summary = summarize(batch, state.settings);
+            const summary = summarize(batch, playerSettings);
             return (
               <article
-                key={batch[0].createdAt}
-                className="flex items-center justify-between gap-4 rounded-2xl border border-[#B1D3B9] bg-white p-4"
+                key={batch[0].batchId}
+                className="flex flex-col justify-between gap-4 rounded-2xl border border-[#B1D3B9] bg-white p-4 sm:flex-row sm:items-center"
               >
                 <div>
                   <strong className="text-sm">
                     {displayTimestamp(batch[0].createdAt)}
                   </strong>
+                  <p className="mt-1 text-xs font-bold text-[#527A70]">
+                    Profit date: {batch[0].date}
+                  </p>
                   <p className="mt-1 text-xs text-[#659287]">
                     {batch
                       .filter((entry) => entry.type === "sellable")
@@ -579,12 +822,20 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                     <p className="mt-1 text-xs font-bold text-red-700">
                       {format(summary.shovels)} shovels ={" "}
                       {format(summary.deduction)} TRO = ₱
-                      {format(toPhp(summary.deduction, state.settings))}
+                      {format(toPhp(summary.deduction, playerSettings))}
                     </p>
                   ) : null}
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center justify-end gap-2">
                   <strong>{format(summary.netTro)} TRO</strong>
+                  <button
+                    type="button"
+                    onClick={() => setEditingBatchId(batch[0].batchId)}
+                    className="rounded-lg bg-[#E6F2DD] p-2 text-[#527A70]"
+                    aria-label="Edit saved entry"
+                  >
+                    <Pencil size={15} />
+                  </button>
                   <button
                     onClick={() =>
                       confirm("Delete this saved entry?") &&
@@ -592,7 +843,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                         ...current,
                         transactions: current.transactions.filter(
                           (entry) =>
-                            entry.createdAt !== batch[0].createdAt ||
+                            entry.batchId !== batch[0].batchId ||
                             entry.playerId !== player.id,
                         ),
                       }))
@@ -613,6 +864,15 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           ) : null}
         </div>
       </section>
+      {editingBatch ? (
+        <EditBatchModal
+          key={editingBatch[0].batchId}
+          batch={editingBatch}
+          player={player}
+          onSave={replaceBatch}
+          onClose={() => setEditingBatchId(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -708,17 +968,20 @@ export default function App() {
           </button>
           <div className="flex items-center gap-2">
             <CloudStatus cloud={cloud} />
-            {cloud.session ? (
+            {!cloud.authReady ? null : cloud.session ? (
               <>
-                <button
-                  type="button"
-                  onClick={cloud.syncNow}
-                  className={soft}
-                  title={cloud.session.user.email}
-                >
-                  <RefreshCw size={16} />
-                  <span className="hidden md:inline">Sync</span>
-                </button>
+                {cloud.syncStatus === "error" ||
+                cloud.syncStatus === "offline" ? (
+                  <button
+                    type="button"
+                    onClick={cloud.syncNow}
+                    className={soft}
+                    title="Retry cloud sync"
+                  >
+                    <RefreshCw size={16} />
+                    <span className="hidden md:inline">Retry</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() =>

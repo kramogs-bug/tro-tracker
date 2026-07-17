@@ -21,6 +21,12 @@ export function localDate(date = new Date()) {
   const offset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
+export function localDateTimeInput(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
 export function format(value, digits = 2) {
   return Number(value || 0).toLocaleString("en-US", {
     maximumFractionDigits: digits,
@@ -135,17 +141,21 @@ export function normalizeState(value) {
             Number(t.quantity) > 0 &&
             /^\d{4}-\d{2}-\d{2}$/.test(t.date || ""),
         )
-        .map((t) => ({
-          id: String(t.id),
-          playerId: t.playerId,
-          type: t.type,
-          quantity: Number(t.quantity),
-          itemName: String(t.itemName || "").slice(0, 80),
-          unitPrice: Math.max(0, Number(t.unitPrice) || 0),
-          date: t.date,
-          note: String(t.note || "").slice(0, 120),
-          createdAt: t.createdAt || new Date().toISOString(),
-        }))
+        .map((t) => {
+          const createdAt = t.createdAt || new Date().toISOString();
+          return {
+            id: String(t.id),
+            batchId: String(t.batchId || `${t.playerId}:${createdAt}`),
+            playerId: t.playerId,
+            type: t.type,
+            quantity: Number(t.quantity),
+            itemName: String(t.itemName || "").slice(0, 80),
+            unitPrice: Math.max(0, Number(t.unitPrice) || 0),
+            date: t.date,
+            note: String(t.note || "").slice(0, 120),
+            createdAt,
+          };
+        })
     : [];
   const settings = Object.fromEntries(
     Object.entries(DEFAULT_SETTINGS).map(([key, fallback]) => {
