@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS = {
 export const emptyState = {
   players: [],
   transactions: [],
+  cashouts: [],
   settings: DEFAULT_SETTINGS,
 };
 
@@ -157,13 +158,31 @@ export function normalizeState(value) {
           };
         })
     : [];
+  const cashouts = Array.isArray(value.cashouts)
+    ? value.cashouts
+        .filter(
+          (cashout) =>
+            cashout?.id &&
+            ids.has(cashout.playerId) &&
+            Number(cashout.amount) > 0 &&
+            /^\d{4}-\d{2}-\d{2}$/.test(cashout.date || ""),
+        )
+        .map((cashout) => ({
+          id: String(cashout.id),
+          playerId: cashout.playerId,
+          amount: Math.round(Number(cashout.amount) * 100) / 100,
+          date: cashout.date,
+          note: String(cashout.note || "").slice(0, 120),
+          createdAt: cashout.createdAt || new Date().toISOString(),
+        }))
+    : [];
   const settings = Object.fromEntries(
     Object.entries(DEFAULT_SETTINGS).map(([key, fallback]) => {
       const number = Number(value.settings?.[key]);
       return [key, number > 0 ? number : fallback];
     }),
   );
-  return { players, transactions, settings };
+  return { players, transactions, cashouts, settings };
 }
 
 export function transactionValues(t, settings) {
@@ -279,6 +298,23 @@ export function exportCsv(state) {
       v.deduction,
       v.netTro,
       toPhp(v.netTro, settings),
+    ]);
+  });
+  (state.cashouts || []).forEach((cashout) => {
+    const player = players.get(cashout.playerId);
+    rows.push([
+      cashout.createdAt,
+      cashout.date,
+      player?.name,
+      "cashout",
+      cashout.note,
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      -cashout.amount,
     ]);
   });
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");

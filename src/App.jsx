@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDownRight,
+  ArrowUpRight,
   Banknote,
+  BarChart3,
   CalendarClock,
+  Calculator,
   Cloud,
   CloudOff,
   Download,
@@ -17,6 +21,7 @@ import {
   Upload,
   UserPlus,
   Users,
+  WalletCards,
   X,
 } from "lucide-react";
 import AccountModal from "./AccountModal.jsx";
@@ -62,6 +67,16 @@ function displayTimestamp(value) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+function displayDate(value) {
+  return new Date(`${value}T00:00:00`).toLocaleDateString("en-PH", {
+    dateStyle: "medium",
+  });
+}
+function formatPeso(value, showPositive = false) {
+  const amount = Number(value) || 0;
+  const sign = amount < 0 ? "−" : showPositive && amount > 0 ? "+" : "";
+  return `${sign}₱${format(Math.abs(amount))}`;
 }
 function Modal({ title, onClose, children, wide = false }) {
   return (
@@ -459,6 +474,357 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
   );
 }
 
+function PlayerHeader({ player, activeTab, onTabChange, onBack }) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-4 text-sm font-bold text-[#527A70]"
+      >
+        ← All players
+      </button>
+      <header>
+        <p className="text-sm font-bold uppercase text-[#659287]">
+          Player tracker
+        </p>
+        <h1 className="text-3xl font-bold">{player.name}</h1>
+        <p className="mt-1 text-xs text-[#659287]">
+          Player added: {displayTimestamp(player.createdAt)}
+        </p>
+      </header>
+      <div
+        className="mt-5 grid max-w-xl grid-cols-2 gap-2 rounded-2xl border border-[#B1D3B9] bg-white p-2"
+        role="tablist"
+        aria-label={`${player.name} tracker tabs`}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "calculator"}
+          onClick={() => onTabChange("calculator")}
+          className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "calculator" ? "bg-[#527A70] text-white" : "text-[#527A70] hover:bg-[#F2F8ED]"}`}
+        >
+          <Calculator size={17} /> Calculator
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "profit"}
+          onClick={() => onTabChange("profit")}
+          className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "profit" ? "bg-[#527A70] text-white" : "text-[#527A70] hover:bg-[#F2F8ED]"}`}
+        >
+          <BarChart3 size={17} /> Profit &amp; Cashout
+        </button>
+      </div>
+    </>
+  );
+}
+
+function ProfitDayCard({ title, date, summary, cashout, settings }) {
+  const grossPhp = toPhp(summary.grossTro, settings);
+  const netPhp = toPhp(summary.netTro, settings);
+  return (
+    <article className="rounded-2xl border border-[#B1D3B9] bg-white p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-bold">{title}</p>
+          <p className="mt-1 text-xs text-[#659287]">{displayDate(date)}</p>
+        </div>
+        <CalendarClock size={20} className="text-[#527A70]" />
+      </div>
+      <p className="mt-5 text-xs font-bold uppercase text-[#659287]">
+        Net profit after shovel
+      </p>
+      <p className="mt-1 text-3xl font-bold">{format(summary.netTro)} TRO</p>
+      <p className="mt-1 text-xl font-bold text-[#527A70]">
+        {formatPeso(netPhp)}
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-3 border-t border-[#E6F2DD] pt-4 text-sm">
+        <div>
+          <p className="text-xs text-[#659287]">Before shovel</p>
+          <p className="mt-1 font-bold">{formatPeso(grossPhp)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-[#659287]">Cashout that day</p>
+          <p className="mt-1 font-bold">{formatPeso(cashout)}</p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ProfitCashoutTab({ player, state, setState, settings }) {
+  const [amount, setAmount] = useState("");
+  const [cashoutDate, setCashoutDate] = useState(localDate);
+  const [note, setNote] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const now = new Date();
+  const today = localDate(now);
+  const previousDay = new Date(now);
+  previousDay.setDate(previousDay.getDate() - 1);
+  const yesterday = localDate(previousDay);
+  const playerTransactions = state.transactions.filter(
+    (entry) => entry.playerId === player.id,
+  );
+  const playerCashouts = (state.cashouts || [])
+    .filter((cashout) => cashout.playerId === player.id)
+    .toSorted(
+      (a, b) =>
+        b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
+    );
+  const todayProfit = summarize(
+    playerTransactions.filter((entry) => entry.date === today),
+    settings,
+  );
+  const yesterdayProfit = summarize(
+    playerTransactions.filter((entry) => entry.date === yesterday),
+    settings,
+  );
+  const allTimeProfit = summarize(playerTransactions, settings);
+  const todayCashout = playerCashouts
+    .filter((cashout) => cashout.date === today)
+    .reduce((sum, cashout) => sum + cashout.amount, 0);
+  const yesterdayCashout = playerCashouts
+    .filter((cashout) => cashout.date === yesterday)
+    .reduce((sum, cashout) => sum + cashout.amount, 0);
+  const totalCashout = playerCashouts.reduce(
+    (sum, cashout) => sum + cashout.amount,
+    0,
+  );
+  const totalProfitPhp = toPhp(allTimeProfit.netTro, settings);
+  const cashoutTro = (totalCashout / settings.phpAmount) * settings.phpTro;
+  const remainingPhp = totalProfitPhp - totalCashout;
+  const remainingTro = allTimeProfit.netTro - cashoutTro;
+  const differenceTro = todayProfit.netTro - yesterdayProfit.netTro;
+  const differencePhp = toPhp(differenceTro, settings);
+  const improved = differencePhp >= 0;
+
+  const addCashout = (event) => {
+    event.preventDefault();
+    const parsedAmount = Math.round(Number(amount) * 100) / 100;
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setFeedback("Maglagay ng valid cashout amount.");
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      cashouts: [
+        {
+          id: createId(),
+          playerId: player.id,
+          amount: parsedAmount,
+          date: cashoutDate,
+          note: note.trim(),
+          createdAt: new Date().toISOString(),
+        },
+        ...(current.cashouts || []),
+      ],
+    }));
+    setAmount("");
+    setNote("");
+    setFeedback(`Cashout saved for ${displayDate(cashoutDate)}.`);
+  };
+
+  return (
+    <div className="mt-6">
+      <section className="grid gap-4 lg:grid-cols-[1fr_1fr_1.15fr]">
+        <ProfitDayCard
+          title="Today"
+          date={today}
+          summary={todayProfit}
+          cashout={todayCashout}
+          settings={settings}
+        />
+        <ProfitDayCard
+          title="Yesterday"
+          date={yesterday}
+          summary={yesterdayProfit}
+          cashout={yesterdayCashout}
+          settings={settings}
+        />
+        <article
+          className={`rounded-2xl p-5 text-white ${improved ? "bg-[#527A70]" : "bg-[#9A4A4A]"}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-bold">Daily difference</p>
+              <p className="mt-1 text-xs text-white/75">
+                Today compared with yesterday
+              </p>
+            </div>
+            {improved ? (
+              <ArrowUpRight size={25} />
+            ) : (
+              <ArrowDownRight size={25} />
+            )}
+          </div>
+          <p className="mt-7 text-4xl font-bold">
+            {differenceTro > 0 ? "+" : ""}
+            {format(differenceTro)} TRO
+          </p>
+          <p className="mt-2 text-2xl font-bold">
+            {formatPeso(differencePhp, true)}
+          </p>
+          <p className="mt-5 text-sm text-white/80">
+            Based on net profit after shovel deductions.
+          </p>
+        </article>
+      </section>
+
+      <section className="mt-6 overflow-hidden rounded-2xl bg-[#29453E] text-white">
+        <div className="grid gap-5 p-5 sm:p-6 lg:grid-cols-3">
+          <div>
+            <p className="text-xs font-bold uppercase text-[#B1D3B9]">
+              Total net profit
+            </p>
+            <p className="mt-2 text-3xl font-bold">
+              {formatPeso(totalProfitPhp)}
+            </p>
+            <p className="mt-1 text-sm text-[#B1D3B9]">
+              {format(allTimeProfit.netTro)} TRO earned
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase text-[#B1D3B9]">
+              Total cashout
+            </p>
+            <p className="mt-2 text-3xl font-bold text-[#FFD6D6]">
+              −{formatPeso(totalCashout)}
+            </p>
+            <p className="mt-1 text-sm text-[#B1D3B9]">
+              {format(cashoutTro)} TRO equivalent
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white/10 p-4">
+            <p className="text-xs font-bold uppercase text-[#B1D3B9]">
+              Remaining balance
+            </p>
+            <p
+              className={`mt-2 text-3xl font-bold ${remainingPhp < 0 ? "text-[#FFD6D6]" : "text-white"}`}
+            >
+              {formatPeso(remainingPhp)}
+            </p>
+            <p className="mt-1 text-sm text-[#B1D3B9]">
+              {format(remainingTro)} TRO after cashouts
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-6 grid gap-6 lg:grid-cols-[360px_1fr]">
+        <form
+          onSubmit={addCashout}
+          className="h-fit rounded-2xl border border-[#B1D3B9] bg-white p-5"
+        >
+          <span className="grid size-11 place-items-center rounded-xl bg-[#E6F2DD] text-[#527A70]">
+            <WalletCards size={20} />
+          </span>
+          <h2 className="mt-4 text-xl font-bold">Add cashout</h2>
+          <p className="mt-1 text-sm text-[#659287]">
+            Enter the actual PHP amount already paid to this player.
+          </p>
+          <label className="mt-5 block text-sm font-bold">
+            Cashout amount (PHP)
+            <input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              inputMode="decimal"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              className={`mt-2 ${input} text-left`}
+              placeholder="0.00"
+            />
+          </label>
+          <label className="mt-4 block text-sm font-bold">
+            Cashout date
+            <input
+              required
+              type="date"
+              value={cashoutDate}
+              onChange={(event) => setCashoutDate(event.target.value)}
+              className={`mt-2 ${input} text-left`}
+            />
+          </label>
+          <label className="mt-4 block text-sm font-bold">
+            Note (optional)
+            <input
+              maxLength="120"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              className={`mt-2 ${input} text-left`}
+              placeholder="Example: Weekly payout"
+            />
+          </label>
+          <button className={`mt-5 w-full ${primary}`}>
+            <Plus size={17} /> Save cashout
+          </button>
+          {feedback ? (
+            <p className="mt-3 text-center text-sm font-bold text-[#527A70]">
+              {feedback}
+            </p>
+          ) : null}
+        </form>
+
+        <div>
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold">Cashout history</h2>
+              <p className="mt-1 text-sm text-[#659287]">
+                All payouts for {player.name}.
+              </p>
+            </div>
+            <strong className="text-lg">{formatPeso(totalCashout)}</strong>
+          </div>
+          <div className="mt-4 space-y-3">
+            {playerCashouts.map((cashout) => (
+              <article
+                key={cashout.id}
+                className="flex items-center justify-between gap-4 rounded-2xl border border-[#B1D3B9] bg-white p-4"
+              >
+                <div>
+                  <p className="font-bold">{displayDate(cashout.date)}</p>
+                  <p className="mt-1 text-xs text-[#659287]">
+                    {cashout.note || displayTimestamp(cashout.createdAt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <strong className="text-lg">
+                    {formatPeso(cashout.amount)}
+                  </strong>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      confirm("Delete this cashout entry?") &&
+                      setState((current) => ({
+                        ...current,
+                        cashouts: (current.cashouts || []).filter(
+                          (entry) => entry.id !== cashout.id,
+                        ),
+                      }))
+                    }
+                    className="rounded-lg bg-red-50 p-2 text-red-700"
+                    aria-label="Delete cashout"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+            {!playerCashouts.length ? (
+              <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-[#659287]">
+                No cashouts recorded yet.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   const playerSettings = player.settings || rawState.settings;
   const state = { ...rawState, settings: playerSettings };
@@ -466,6 +832,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   const [shovels, setShovels] = useState("");
   const [entryTimestamp, setEntryTimestamp] = useState(localDateTimeInput);
   const [editingBatchId, setEditingBatchId] = useState(null);
+  const [activeTab, setActiveTab] = useState("calculator");
   const [feedback, setFeedback] = useState("");
   const records = state.transactions
     .filter((entry) => entry.playerId === player.id)
@@ -577,23 +944,32 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
     setEditingBatchId(null);
     setFeedback("Saved entry updated.");
   };
+  if (activeTab === "profit") {
+    return (
+      <>
+        <PlayerHeader
+          player={player}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          onBack={onBack}
+        />
+        <ProfitCashoutTab
+          player={player}
+          state={rawState}
+          setState={setState}
+          settings={playerSettings}
+        />
+      </>
+    );
+  }
   return (
     <>
-      <button
-        onClick={onBack}
-        className="mb-4 text-sm font-bold text-[#527A70]"
-      >
-        ← All players
-      </button>
-      <header>
-        <p className="text-sm font-bold uppercase text-[#659287]">
-          Calculator tab
-        </p>
-        <h1 className="text-3xl font-bold">{player.name}</h1>
-        <p className="mt-1 text-xs text-[#659287]">
-          Player added: {displayTimestamp(player.createdAt)}
-        </p>
-      </header>
+      <PlayerHeader
+        player={player}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onBack={onBack}
+      />
       <VisibleRatioEditor
         settings={playerSettings}
         onSave={(settings) => {
@@ -1128,6 +1504,9 @@ export default function App() {
                             (entry) => entry.id !== player.id,
                           ),
                           transactions: current.transactions.filter(
+                            (entry) => entry.playerId !== player.id,
+                          ),
+                          cashouts: (current.cashouts || []).filter(
                             (entry) => entry.playerId !== player.id,
                           ),
                         }))
