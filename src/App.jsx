@@ -11,6 +11,7 @@ import {
   Download,
   FileDown,
   LogOut,
+  Mail,
   Pickaxe,
   Pencil,
   Plus,
@@ -25,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import AccountModal from "./AccountModal.jsx";
+import GmailAccountsTab from "./GmailAccountsTab.jsx";
 import { SHELL_ITEMS } from "./sellablesData.js";
 import {
   cashoutRatios,
@@ -139,6 +141,43 @@ function CloudStatus({ cloud }) {
     </span>
   );
 }
+
+function MainTabs({ activeTab, gmailCount, onTabChange }) {
+  return (
+    <div
+      className="mb-7 grid max-w-xl grid-cols-2 gap-2 rounded-2xl border border-[#B1D3B9] bg-white p-2"
+      role="tablist"
+      aria-label="Main tracker sections"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "tracker"}
+        onClick={() => onTabChange("tracker")}
+        className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "tracker" ? "bg-[#527A70] text-white" : "text-[#527A70] hover:bg-[#F2F8ED]"}`}
+      >
+        <Calculator size={17} /> TRO Tracker
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "gmail"}
+        onClick={() => onTabChange("gmail")}
+        className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "gmail" ? "bg-[#527A70] text-white" : "text-[#527A70] hover:bg-[#F2F8ED]"}`}
+      >
+        <Mail size={17} /> Gmail Accounts
+        {gmailCount ? (
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs ${activeTab === "gmail" ? "bg-white/20" : "bg-[#E6F2DD]"}`}
+          >
+            {gmailCount}
+          </span>
+        ) : null}
+      </button>
+    </div>
+  );
+}
+
 function PlayerForm({ onSave, onClose }) {
   const [name, setName] = useState("");
   return (
@@ -1359,6 +1398,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
 export default function App() {
   const [state, setState] = useState(loadState);
   const [selectedId, setSelectedId] = useState(null);
+  const [mainTab, setMainTab] = useState("tracker");
   const [modal, setModal] = useState(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const importRef = useRef(null);
@@ -1400,6 +1440,14 @@ export default function App() {
     [playerSummaries],
   );
   const selected = state.players.find((player) => player.id === selectedId);
+  const gmailCountsByPlayer = useMemo(() => {
+    const counts = new Map();
+    (state.gmailAccounts || []).forEach((account) => {
+      if (!account.playerId) return;
+      counts.set(account.playerId, (counts.get(account.playerId) || 0) + 1);
+    });
+    return counts;
+  }, [state.gmailAccounts]);
   const addPlayer = (name) => {
     const player = {
       id: createId(),
@@ -1414,6 +1462,32 @@ export default function App() {
     }));
     setSelectedId(player.id);
     setModal(null);
+  };
+  const deletePlayer = (playerId) => {
+    const updatedAt = new Date().toISOString();
+    setState((current) => ({
+      ...current,
+      players: current.players.filter((entry) => entry.id !== playerId),
+      transactions: current.transactions.filter(
+        (entry) => entry.playerId !== playerId,
+      ),
+      cashouts: (current.cashouts || []).filter(
+        (entry) => entry.playerId !== playerId,
+      ),
+      gmailAccounts: (current.gmailAccounts || []).map((account) => {
+        if (account.playerId !== playerId) return account;
+        const status = account.status === "in_use" ? "available" : account.status;
+        return {
+          ...account,
+          status,
+          playerId: null,
+          assignedAt: null,
+          updatedAt,
+          statusUpdatedAt:
+            status !== account.status ? updatedAt : account.statusUpdatedAt,
+        };
+      }),
+    }));
   };
   const restore = async (event) => {
     const file = event.target.files?.[0];
@@ -1434,7 +1508,10 @@ export default function App() {
       <nav className="sticky top-0 z-30 border-b border-[#B1D3B9] bg-[#F8FBF5]/95">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
           <button
-            onClick={() => setSelectedId(null)}
+            onClick={() => {
+              setSelectedId(null);
+              setMainTab("tracker");
+            }}
             className="flex items-center gap-3"
           >
             <span className="grid size-10 place-items-center rounded-xl bg-[#527A70] text-white">
@@ -1481,7 +1558,7 @@ export default function App() {
                 <span className="hidden sm:inline">Cloud account</span>
               </button>
             )}
-            {!selected ? (
+            {!selected && mainTab === "tracker" ? (
               <button onClick={() => setModal("ratios")} className={soft}>
                 <Settings size={17} />
                 <span className="hidden md:inline">Default ratios</span>
@@ -1491,6 +1568,13 @@ export default function App() {
         </div>
       </nav>
       <div className="mx-auto max-w-7xl px-4 py-7">
+        {!selected ? (
+          <MainTabs
+            activeTab={mainTab}
+            gmailCount={(state.gmailAccounts || []).length}
+            onTabChange={setMainTab}
+          />
+        ) : null}
         {selected ? (
           <PlayerCalculator
             player={selected}
@@ -1498,6 +1582,8 @@ export default function App() {
             setState={setState}
             onBack={() => setSelectedId(null)}
           />
+        ) : mainTab === "gmail" ? (
+          <GmailAccountsTab state={state} setState={setState} />
         ) : (
           <>
             <header className="flex items-end justify-between gap-4">
@@ -1559,6 +1645,7 @@ export default function App() {
                   ),
                   player.settings || state.settings,
                 );
+                const linkedGmailCount = gmailCountsByPlayer.get(player.id) || 0;
                 return (
                   <article
                     key={player.id}
@@ -1585,6 +1672,10 @@ export default function App() {
                       <p className="mt-1 text-xs text-[#659287]">
                         Added {displayTimestamp(player.createdAt)}
                       </p>
+                      <p className="mt-2 flex items-center gap-1.5 text-xs font-bold text-[#527A70]">
+                        <Mail size={13} /> {linkedGmailCount} Gmail account
+                        {linkedGmailCount === 1 ? "" : "s"} linked
+                      </p>
                       <p className="mt-4 rounded-xl bg-[#E6F2DD] py-2 text-center text-sm font-bold">
                         Open calculator
                       </p>
@@ -1592,18 +1683,7 @@ export default function App() {
                     <button
                       onClick={() =>
                         confirm(`Delete ${player.name}?`) &&
-                        setState((current) => ({
-                          ...current,
-                          players: current.players.filter(
-                            (entry) => entry.id !== player.id,
-                          ),
-                          transactions: current.transactions.filter(
-                            (entry) => entry.playerId !== player.id,
-                          ),
-                          cashouts: (current.cashouts || []).filter(
-                            (entry) => entry.playerId !== player.id,
-                          ),
-                        }))
+                        deletePlayer(player.id)
                       }
                       className="mt-2 w-full rounded-xl bg-red-50 py-2 text-xs font-bold text-red-700"
                     >

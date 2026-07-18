@@ -1,4 +1,7 @@
 const STORAGE_KEY = "troTrackerData:v1";
+const GMAIL_PATTERN = /^[^\s@]+@gmail\.com$/i;
+export const GMAIL_STATUSES = ["available", "ready", "in_use", "jailed"];
+const GMAIL_STATUS_SET = new Set(GMAIL_STATUSES);
 export const DEFAULT_SETTINGS = {
   gralatsPerTro: 3.8,
   shovelTro: 3,
@@ -9,6 +12,7 @@ export const emptyState = {
   players: [],
   transactions: [],
   cashouts: [],
+  gmailAccounts: [],
   settings: DEFAULT_SETTINGS,
 };
 
@@ -226,8 +230,51 @@ export function normalizeState(value) {
           };
         })
     : [];
+  const seenGmailAccounts = new Set();
+  const gmailAccounts = (
+    Array.isArray(value.gmailAccounts) ? value.gmailAccounts : []
+  ).flatMap((account) => {
+    const email = String(account?.email || "")
+      .trim()
+      .toLowerCase()
+      .slice(0, 254);
+    if (
+      !account?.id ||
+      !GMAIL_PATTERN.test(email) ||
+      seenGmailAccounts.has(email)
+    )
+      return [];
+    seenGmailAccounts.add(email);
+    const requestedStatus = GMAIL_STATUS_SET.has(account.status)
+      ? account.status
+      : "available";
+    const linkedPlayerId = ids.has(account.playerId)
+      ? String(account.playerId)
+      : null;
+    const status =
+      requestedStatus === "in_use" && !linkedPlayerId
+        ? "available"
+        : requestedStatus;
+    const playerId = ["available", "ready"].includes(status)
+      ? null
+      : linkedPlayerId;
+    const createdAt = account.createdAt || new Date().toISOString();
+    return [
+      {
+        id: String(account.id),
+        email,
+        status,
+        playerId,
+        note: String(account.note || "").slice(0, 200),
+        createdAt,
+        updatedAt: account.updatedAt || createdAt,
+        statusUpdatedAt: account.statusUpdatedAt || createdAt,
+        assignedAt: playerId ? account.assignedAt || createdAt : null,
+      },
+    ];
+  });
   const settings = normalizeSettings(value.settings);
-  return { players, transactions, cashouts, settings };
+  return { players, transactions, cashouts, gmailAccounts, settings };
 }
 
 export function transactionValues(t, settings) {
@@ -313,7 +360,7 @@ export function exportBackup(state) {
   return JSON.stringify(
     {
       type: "tro-tracker-backup",
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       data: state,
     },
@@ -402,4 +449,33 @@ export function exportCsv(state) {
     ]);
   });
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+
+export function exportGmailCsv(state) {
+  const players = new Map(state.players.map((player) => [player.id, player]));
+  const rows = [
+    [
+      "Gmail",
+      "Status",
+      "Player",
+      "Note",
+      "Date added",
+      "Last updated",
+      "Status updated",
+      "Assigned at",
+    ],
+  ];
+  (state.gmailAccounts || []).forEach((account) => {
+    rows.push([
+      account.email,
+      account.status,
+      account.playerId ? players.get(account.playerId)?.name || "" : "",
+      account.note,
+      account.createdAt,
+      account.updatedAt,
+      account.statusUpdatedAt,
+      account.assignedAt || "",
+    ]);
+  });
+  return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
