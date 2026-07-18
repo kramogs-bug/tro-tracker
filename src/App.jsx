@@ -27,6 +27,7 @@ import {
 import AccountModal from "./AccountModal.jsx";
 import { SHELL_ITEMS } from "./sellablesData.js";
 import {
+  cashoutRatios,
   createId,
   exportBackup,
   exportCsv,
@@ -36,6 +37,7 @@ import {
   localDate,
   localDateTimeInput,
   parseQuantityExpression,
+  ratiosForDate,
   saveState,
   summarize,
   summarizePeriods,
@@ -220,19 +222,21 @@ function RatioForm({ settings, onSave, onClose }) {
   );
 }
 
-function VisibleRatioEditor({ settings, onSave }) {
+function VisibleRatioEditor({ settings, date, isSaved, onSave }) {
+  const { gralatsPerTro, shovelTro, phpTro, phpAmount } = settings;
   const [values, setValues] = useState(() =>
     Object.fromEntries(
       Object.entries(settings).map(([key, value]) => [key, String(value)]),
     ),
   );
   useEffect(() => {
-    setValues(
-      Object.fromEntries(
-        Object.entries(settings).map(([key, value]) => [key, String(value)]),
-      ),
-    );
-  }, [settings]);
+    setValues({
+      gralatsPerTro: String(gralatsPerTro),
+      shovelTro: String(shovelTro),
+      phpTro: String(phpTro),
+      phpAmount: String(phpAmount),
+    });
+  }, [gralatsPerTro, shovelTro, phpTro, phpAmount]);
   const fields = [
     ["gralatsPerTro", "Gralats / TRO"],
     ["shovelTro", "TRO / shovel"],
@@ -258,14 +262,17 @@ function VisibleRatioEditor({ settings, onSave }) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="flex items-center gap-2 font-bold">
-            <Settings size={17} /> {"Player conversion ratios"}
+            <Settings size={17} /> Daily conversion ratios
           </p>
           <p className="mt-1 text-xs text-[#659287]">
-            These ratios apply only to this player's output.
+            {displayDate(date)} ·{" "}
+            {isSaved
+              ? "Saved ratio for this date"
+              : "Inherited ratio — save to lock it for this date"}
           </p>
         </div>
         <button className={primary}>
-          <Save size={15} /> Save ratios
+          <Save size={15} /> Save daily ratio
         </button>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -316,6 +323,9 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
       ) || "",
     ),
   );
+  const [ratios, setRatios] = useState(() => ({
+    ...(batch[0].ratios || player.settings),
+  }));
   const [feedback, setFeedback] = useState("");
   const parsedQuantities = Object.fromEntries(
     SHELL_ITEMS.map((item) => [
@@ -340,10 +350,21 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
       setFeedback("May invalid o incomplete expression. Example: 100+200");
       return;
     }
+    if (
+      !Object.values(ratios).every(
+        (value) => Number.isFinite(Number(value)) && Number(value) > 0,
+      )
+    ) {
+      setFeedback("Lahat ng ratios ay dapat greater than zero.");
+      return;
+    }
 
     const createdAt = selectedTime.toISOString();
     const date = localDate(selectedTime);
     const batchId = batch[0].batchId;
+    const savedRatios = Object.fromEntries(
+      Object.entries(ratios).map(([key, value]) => [key, Number(value)]),
+    );
     const existing = new Map();
     batch.forEach((entry) => {
       const key = `${entry.type}:${entry.itemName}`;
@@ -365,6 +386,7 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
           date,
           note: previous?.note || "",
           createdAt,
+          ratios: savedRatios,
         },
       ];
     });
@@ -383,12 +405,19 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
               date,
               note: previousShovel?.note || "",
               createdAt,
+              ratios: savedRatios,
             },
           ]
         : [];
     const preservedTro = batch
       .filter((entry) => entry.type === "tro")
-      .map((entry) => ({ ...entry, batchId, date, createdAt }));
+      .map((entry) => ({
+        ...entry,
+        batchId,
+        date,
+        createdAt,
+        ratios: savedRatios,
+      }));
     const records = [...shellRecords, ...shovelRecords, ...preservedTro];
     if (!records.length) {
       setFeedback("Maglagay ng kahit isang shell quantity o shovel.");
@@ -414,6 +443,38 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
             This date controls the daily, weekly, and monthly totals.
           </span>
         </label>
+        <section className="mt-5 rounded-2xl border border-[#B1D3B9] bg-[#E6F2DD]/50 p-4">
+          <p className="text-sm font-bold">Ratios used for this entry</p>
+          <p className="mt-1 text-xs text-[#659287]">
+            Editing these ratios recalculates only this saved batch.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {[
+              ["gralatsPerTro", "Gralats / TRO"],
+              ["shovelTro", "TRO / shovel"],
+              ["phpTro", "TRO amount"],
+              ["phpAmount", "PHP value"],
+            ].map(([key, label]) => (
+              <label key={key} className="text-xs font-bold text-[#527A70]">
+                {label}
+                <input
+                  required
+                  type="number"
+                  min="0.01"
+                  step="any"
+                  value={ratios[key]}
+                  onChange={(event) =>
+                    setRatios((current) => ({
+                      ...current,
+                      [key]: event.target.value,
+                    }))
+                  }
+                  className={`mt-1.5 ${input}`}
+                />
+              </label>
+            ))}
+          </div>
+        </section>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           {SHELL_ITEMS.map((item) => (
             <label
@@ -521,9 +582,9 @@ function PlayerHeader({ player, activeTab, onTabChange, onBack }) {
   );
 }
 
-function ProfitDayCard({ title, date, summary, cashout, settings }) {
-  const grossPhp = toPhp(summary.grossTro, settings);
-  const netPhp = toPhp(summary.netTro, settings);
+function ProfitDayCard({ title, date, summary, cashout }) {
+  const grossPhp = summary.grossPhp;
+  const netPhp = summary.netPhp;
   return (
     <article className="rounded-2xl border border-[#B1D3B9] bg-white p-5">
       <div className="flex items-start justify-between gap-3">
@@ -564,6 +625,11 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   const previousDay = new Date(now);
   previousDay.setDate(previousDay.getDate() - 1);
   const yesterday = localDate(previousDay);
+  const selectedCashoutRatios = ratiosForDate(
+    player,
+    cashoutDate,
+    state.settings,
+  );
   const playerTransactions = state.transactions.filter(
     (entry) => entry.playerId === player.id,
   );
@@ -592,12 +658,15 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
     (sum, cashout) => sum + cashout.amount,
     0,
   );
-  const totalProfitPhp = toPhp(allTimeProfit.netTro, settings);
-  const cashoutTro = (totalCashout / settings.phpAmount) * settings.phpTro;
+  const totalProfitPhp = allTimeProfit.netPhp;
+  const cashoutTro = playerCashouts.reduce((sum, cashout) => {
+    const ratios = cashoutRatios(cashout, settings);
+    return sum + (cashout.amount / ratios.phpAmount) * ratios.phpTro;
+  }, 0);
   const remainingPhp = totalProfitPhp - totalCashout;
   const remainingTro = allTimeProfit.netTro - cashoutTro;
   const differenceTro = todayProfit.netTro - yesterdayProfit.netTro;
-  const differencePhp = toPhp(differenceTro, settings);
+  const differencePhp = todayProfit.netPhp - yesterdayProfit.netPhp;
   const improved = differencePhp >= 0;
 
   const addCashout = (event) => {
@@ -617,6 +686,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
           date: cashoutDate,
           note: note.trim(),
           createdAt: new Date().toISOString(),
+          ratios: selectedCashoutRatios,
         },
         ...(current.cashouts || []),
       ],
@@ -634,14 +704,12 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
           date={today}
           summary={todayProfit}
           cashout={todayCashout}
-          settings={settings}
         />
         <ProfitDayCard
           title="Yesterday"
           date={yesterday}
           summary={yesterdayProfit}
           cashout={yesterdayCashout}
-          settings={settings}
         />
         <article
           className={`rounded-2xl p-5 text-white ${improved ? "bg-[#527A70]" : "bg-[#9A4A4A]"}`}
@@ -747,6 +815,10 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
               onChange={(event) => setCashoutDate(event.target.value)}
               className={`mt-2 ${input} text-left`}
             />
+            <span className="mt-1 block text-xs font-normal text-[#659287]">
+              Uses {format(selectedCashoutRatios.phpTro)} TRO = ₱
+              {format(selectedCashoutRatios.phpAmount)} for this date.
+            </span>
           </label>
           <label className="mt-4 block text-sm font-bold">
             Note (optional)
@@ -834,6 +906,14 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   const [editingBatchId, setEditingBatchId] = useState(null);
   const [activeTab, setActiveTab] = useState("calculator");
   const [feedback, setFeedback] = useState("");
+  const entryDate = /^\d{4}-\d{2}-\d{2}/.test(entryTimestamp)
+    ? entryTimestamp.slice(0, 10)
+    : localDate();
+  const entrySettings = useMemo(
+    () => ratiosForDate(player, entryDate, rawState.settings),
+    [entryDate, player, rawState.settings],
+  );
+  const hasSavedDailyRatio = Boolean(player.ratioHistory?.[entryDate]);
   const records = state.transactions
     .filter((entry) => entry.playerId === player.id)
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -855,8 +935,8 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
     (sum, item) => sum + (parsedQuantities[item.name] || 0) * item.price,
     0,
   );
-  const previewTro = previewGralats / playerSettings.gralatsPerTro;
-  const previewDeduction = (parsedShovels || 0) * playerSettings.shovelTro;
+  const previewTro = previewGralats / entrySettings.gralatsPerTro;
+  const previewDeduction = (parsedShovels || 0) * entrySettings.shovelTro;
   const saveBatch = () => {
     if (hasInvalidExpression) {
       setFeedback("May invalid o incomplete expression. Example: 100+200");
@@ -884,6 +964,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               date,
               note: "",
               createdAt: timestamp,
+              ratios: entrySettings,
             },
           ]
         : [],
@@ -902,6 +983,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               date,
               note: "",
               createdAt: timestamp,
+              ratios: entrySettings,
             },
           ]
         : [];
@@ -970,18 +1052,55 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         onTabChange={setActiveTab}
         onBack={onBack}
       />
+      <label className="mt-5 block max-w-xl rounded-2xl border border-[#B1D3B9] bg-white p-4 text-sm font-bold">
+        <span className="flex items-center gap-2">
+          <CalendarClock size={17} /> Entry date &amp; time
+        </span>
+        <input
+          required
+          type="datetime-local"
+          step="60"
+          value={entryTimestamp}
+          onChange={(event) => setEntryTimestamp(event.target.value)}
+          className={`mt-2 ${input} text-left`}
+        />
+        <span className="mt-1 block text-xs font-normal text-[#659287]">
+          Choose the date first, then confirm its daily ratios below.
+        </span>
+      </label>
       <VisibleRatioEditor
-        settings={playerSettings}
+        settings={entrySettings}
+        date={entryDate}
+        isSaved={hasSavedDailyRatio}
         onSave={(settings) => {
           setState((current) => ({
             ...current,
             players: current.players.map((currentPlayer) =>
               currentPlayer.id === player.id
-                ? { ...currentPlayer, settings }
+                ? {
+                    ...currentPlayer,
+                    settings,
+                    ratioHistory: {
+                      ...(currentPlayer.ratioHistory || {}),
+                      [entryDate]: settings,
+                    },
+                  }
                 : currentPlayer,
             ),
+            transactions: current.transactions.map((entry) =>
+              entry.playerId === player.id && entry.date === entryDate
+                ? { ...entry, ratios: settings }
+                : entry,
+            ),
+            cashouts: (current.cashouts || []).map((cashout) =>
+              cashout.playerId === player.id && cashout.date === entryDate
+                ? { ...cashout, ratios: settings }
+                : cashout,
+            ),
           }));
-          setFeedback("Player ratios updated.");
+          setFeedback(
+            `Daily ratios saved for ${displayDate(entryDate)}. Existing entries on this date were recalculated.`,
+          );
         }}
       />
       <section className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -1029,7 +1148,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
             <span>
               <strong className="block text-sm">Shovels</strong>
               <small className="text-[#659287]">
-                −{state.settings.shovelTro} TRO each
+                −{entrySettings.shovelTro} TRO each
               </small>
             </span>
             <input
@@ -1043,22 +1162,6 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               className={input}
               aria-label="Shovel quantity"
             />
-          </label>
-          <label className="mt-4 block rounded-xl border border-[#E6F2DD] bg-[#F8FBF5] p-3 text-sm font-bold">
-            <span className="flex items-center gap-2">
-              <CalendarClock size={17} /> Entry date &amp; time
-            </span>
-            <input
-              required
-              type="datetime-local"
-              step="60"
-              value={entryTimestamp}
-              onChange={(event) => setEntryTimestamp(event.target.value)}
-              className={`mt-2 ${input} text-left`}
-            />
-            <span className="mt-1 block text-xs font-normal text-[#659287]">
-              Change this when adding quantities for an earlier date.
-            </span>
           </label>
           <button onClick={saveBatch} className={`mt-5 w-full ${primary}`}>
             <Save size={17} /> Save entry
@@ -1075,14 +1178,14 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           <div className="my-4 border-t border-white/20" />
           <p className="font-bold">{format(previewTro)} gross TRO</p>
           <p className="text-sm text-[#E6F2DD]">
-            ₱{format(toPhp(previewTro, playerSettings))} before shovel
+            ₱{format(toPhp(previewTro, entrySettings))} before shovel
           </p>
           <p className="text-red-100">−{format(previewDeduction)} shovel TRO</p>
           <p className="mt-3 text-2xl font-bold">
             {format(previewTro - previewDeduction)} net TRO
           </p>
           <p className="mt-1">
-            ₱{format(toPhp(previewTro - previewDeduction, state.settings))}
+            ₱{format(toPhp(previewTro - previewDeduction, entrySettings))}
           </p>
         </aside>
       </section>
@@ -1108,7 +1211,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
               </p>
               <p className="mt-1 text-lg font-bold">
                 {format(profit.grossTro)} TRO · ₱
-                {format(toPhp(profit.grossTro, playerSettings))}
+                {format(profit.grossPhp)}
               </p>
               <p className="mt-3 text-xs uppercase text-[#B1D3B9]">
                 After shovel
@@ -1117,7 +1220,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                 {format(profit.netTro)} TRO
               </p>
               <p className="mt-1 text-lg">
-                ₱{format(toPhp(profit.netTro, playerSettings))}
+                ₱{format(profit.netPhp)}
               </p>
               <p className="mt-3 text-xs text-[#B1D3B9]">
                 {format(profit.gralats)} G · {format(profit.shovels)} shovels
@@ -1139,7 +1242,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         />
         <Stat
           label="Gross PHP before shovel"
-          value={`₱${format(toPhp(total.grossTro, playerSettings))}`}
+          value={`₱${format(total.grossPhp)}`}
           icon={<Banknote size={19} />}
         />
         <Stat
@@ -1154,7 +1257,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         />
         <Stat
           label="Shovel PHP"
-          value={`₱${format(toPhp(total.deduction, state.settings))}`}
+          value={`₱${format(total.deductionPhp)}`}
           icon={<Banknote size={19} />}
         />
         <Stat
@@ -1164,7 +1267,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         />
         <Stat
           label="PHP value"
-          value={`₱${format(toPhp(total.netTro, state.settings))}`}
+          value={`₱${format(total.netPhp)}`}
           icon={<Banknote size={19} />}
         />
       </div>
@@ -1198,7 +1301,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                     <p className="mt-1 text-xs font-bold text-red-700">
                       {format(summary.shovels)} shovels ={" "}
                       {format(summary.deduction)} TRO = ₱
-                      {format(toPhp(summary.deduction, playerSettings))}
+                      {format(summary.deductionPhp)}
                     </p>
                   ) : null}
                 </div>
@@ -1281,12 +1384,8 @@ export default function App() {
           shovels: sum.shovels + row.summary.shovels,
           deduction: sum.deduction + row.summary.deduction,
           netTro: sum.netTro + row.summary.netTro,
-          shovelPhp:
-            sum.shovelPhp +
-            toPhp(row.summary.deduction, row.player.settings || state.settings),
-          php:
-            sum.php +
-            toPhp(row.summary.netTro, row.player.settings || state.settings),
+          shovelPhp: sum.shovelPhp + row.summary.deductionPhp,
+          php: sum.php + row.summary.netPhp,
         }),
         {
           gralats: 0,
@@ -1298,7 +1397,7 @@ export default function App() {
           shovelPhp: 0,
         },
       ),
-    [playerSummaries, state.settings],
+    [playerSummaries],
   );
   const selected = state.players.find((player) => player.id === selectedId);
   const addPlayer = (name) => {
@@ -1307,6 +1406,7 @@ export default function App() {
       name,
       createdAt: new Date().toISOString(),
       settings: { ...state.settings },
+      ratioHistory: { [localDate()]: { ...state.settings } },
     };
     setState((current) => ({
       ...current,
@@ -1477,13 +1577,7 @@ export default function App() {
                             {format(playerTotal.netTro)} TRO
                           </strong>
                           <small>
-                            ₱
-                            {format(
-                              toPhp(
-                                playerTotal.netTro,
-                                player.settings || state.settings,
-                              ),
-                            )}
+                            ₱{format(playerTotal.netPhp)}
                           </small>
                         </span>
                       </div>

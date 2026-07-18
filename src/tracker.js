@@ -12,6 +12,37 @@ export const emptyState = {
   settings: DEFAULT_SETTINGS,
 };
 
+function normalizeSettings(value, fallback = DEFAULT_SETTINGS) {
+  return Object.fromEntries(
+    Object.entries(DEFAULT_SETTINGS).map(([key, defaultValue]) => {
+      const fallbackValue = Number(fallback?.[key]) || defaultValue;
+      const number = Number(value?.[key]);
+      return [key, number > 0 ? number : fallbackValue];
+    }),
+  );
+}
+
+export function ratiosForDate(player, date, fallback = DEFAULT_SETTINGS) {
+  const history = player?.ratioHistory || {};
+  if (history[date]) return normalizeSettings(history[date], fallback);
+  const previousDate = Object.keys(history)
+    .filter((entryDate) => entryDate <= date)
+    .toSorted()
+    .at(-1);
+  return normalizeSettings(
+    previousDate ? history[previousDate] : player?.settings,
+    fallback,
+  );
+}
+
+export function transactionRatios(transaction, fallback = DEFAULT_SETTINGS) {
+  return normalizeSettings(transaction?.ratios, fallback);
+}
+
+export function cashoutRatios(cashout, fallback = DEFAULT_SETTINGS) {
+  return normalizeSettings(cashout?.ratios, fallback);
+}
+
 export function createId() {
   return (
     globalThis.crypto?.randomUUID?.() ||
@@ -110,28 +141,35 @@ export function saveState(state) {
 
 export function normalizeState(value) {
   if (!value || typeof value !== "object") return emptyState;
-  const fallbackSettings = Object.fromEntries(
-    Object.entries(DEFAULT_SETTINGS).map(([key, fallback]) => {
-      const number = Number(value.settings?.[key]);
-      return [key, number > 0 ? number : fallback];
-    }),
-  );
+  const fallbackSettings = normalizeSettings(value.settings);
   const players = Array.isArray(value.players)
     ? value.players
         .filter((p) => p?.id && typeof p.name === "string")
-        .map((p) => ({
-          id: String(p.id),
-          name: p.name.slice(0, 50),
-          createdAt: p.createdAt || new Date().toISOString(),
-          settings: Object.fromEntries(
-            Object.entries(DEFAULT_SETTINGS).map(([key, fallback]) => {
-              const number = Number(p.settings?.[key] ?? fallbackSettings[key]);
-              return [key, number > 0 ? number : fallback];
-            }),
-          ),
-        }))
+        .map((p) => {
+          const settings = normalizeSettings(p.settings, fallbackSettings);
+          const ratioHistory = Object.fromEntries(
+            Object.entries(
+              p.ratioHistory && typeof p.ratioHistory === "object"
+                ? p.ratioHistory
+                : {},
+            )
+              .filter(([date]) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+              .map(([date, ratios]) => [
+                date,
+                normalizeSettings(ratios, settings),
+              ]),
+          );
+          return {
+            id: String(p.id),
+            name: p.name.slice(0, 50),
+            createdAt: p.createdAt || new Date().toISOString(),
+            settings,
+            ratioHistory,
+          };
+        })
     : [];
   const ids = new Set(players.map((p) => p.id));
+  const playersById = new Map(players.map((player) => [player.id, player]));
   const transactions = Array.isArray(value.transactions)
     ? value.transactions
         .filter(
@@ -144,6 +182,7 @@ export function normalizeState(value) {
         )
         .map((t) => {
           const createdAt = t.createdAt || new Date().toISOString();
+          const player = playersById.get(t.playerId);
           return {
             id: String(t.id),
             batchId: String(t.batchId || `${t.playerId}:${createdAt}`),
@@ -155,6 +194,10 @@ export function normalizeState(value) {
             date: t.date,
             note: String(t.note || "").slice(0, 120),
             createdAt,
+            ratios: normalizeSettings(
+              t.ratios,
+              player?.settings || fallbackSettings,
+            ),
           };
         })
     : [];
@@ -167,34 +210,47 @@ export function normalizeState(value) {
             Number(cashout.amount) > 0 &&
             /^\d{4}-\d{2}-\d{2}$/.test(cashout.date || ""),
         )
-        .map((cashout) => ({
-          id: String(cashout.id),
-          playerId: cashout.playerId,
-          amount: Math.round(Number(cashout.amount) * 100) / 100,
-          date: cashout.date,
-          note: String(cashout.note || "").slice(0, 120),
-          createdAt: cashout.createdAt || new Date().toISOString(),
-        }))
+        .map((cashout) => {
+          const player = playersById.get(cashout.playerId);
+          return {
+            id: String(cashout.id),
+            playerId: cashout.playerId,
+            amount: Math.round(Number(cashout.amount) * 100) / 100,
+            date: cashout.date,
+            note: String(cashout.note || "").slice(0, 120),
+            createdAt: cashout.createdAt || new Date().toISOString(),
+            ratios: normalizeSettings(
+              cashout.ratios,
+              player?.settings || fallbackSettings,
+            ),
+          };
+        })
     : [];
-  const settings = Object.fromEntries(
-    Object.entries(DEFAULT_SETTINGS).map(([key, fallback]) => {
-      const number = Number(value.settings?.[key]);
-      return [key, number > 0 ? number : fallback];
-    }),
-  );
+  const settings = normalizeSettings(value.settings);
   return { players, transactions, cashouts, settings };
 }
 
 export function transactionValues(t, settings) {
+  const ratios = transactionRatios(t, settings);
   const gralats = t.type === "sellable" ? t.quantity * t.unitPrice : 0;
   const grossTro =
     t.type === "sellable"
-      ? gralats / settings.gralatsPerTro
+      ? gralats / ratios.gralatsPerTro
       : t.type === "tro"
         ? t.quantity
         : 0;
-  const deduction = t.type === "shovel" ? t.quantity * settings.shovelTro : 0;
-  return { gralats, grossTro, deduction, netTro: grossTro - deduction };
+  const deduction = t.type === "shovel" ? t.quantity * ratios.shovelTro : 0;
+  const netTro = grossTro - deduction;
+  return {
+    gralats,
+    grossTro,
+    deduction,
+    netTro,
+    grossPhp: toPhp(grossTro, ratios),
+    deductionPhp: toPhp(deduction, ratios),
+    netPhp: toPhp(netTro, ratios),
+    ratios,
+  };
 }
 
 export function summarize(transactions, settings) {
@@ -206,9 +262,21 @@ export function summarize(transactions, settings) {
       sum.shovels += t.type === "shovel" ? t.quantity : 0;
       sum.deduction += value.deduction;
       sum.netTro += value.netTro;
+      sum.grossPhp += value.grossPhp;
+      sum.deductionPhp += value.deductionPhp;
+      sum.netPhp += value.netPhp;
       return sum;
     },
-    { gralats: 0, grossTro: 0, shovels: 0, deduction: 0, netTro: 0 },
+    {
+      gralats: 0,
+      grossTro: 0,
+      shovels: 0,
+      deduction: 0,
+      netTro: 0,
+      grossPhp: 0,
+      deductionPhp: 0,
+      netPhp: 0,
+    },
   );
 }
 
@@ -279,6 +347,10 @@ export function exportCsv(state) {
       "TRO deduction",
       "Net TRO",
       "PHP",
+      "Gralats per TRO",
+      "TRO per shovel",
+      "TRO amount",
+      "PHP amount",
     ],
   ];
   state.transactions.forEach((t) => {
@@ -297,11 +369,19 @@ export function exportCsv(state) {
       v.grossTro,
       v.deduction,
       v.netTro,
-      toPhp(v.netTro, settings),
+      v.netPhp,
+      v.ratios.gralatsPerTro,
+      v.ratios.shovelTro,
+      v.ratios.phpTro,
+      v.ratios.phpAmount,
     ]);
   });
   (state.cashouts || []).forEach((cashout) => {
     const player = players.get(cashout.playerId);
+    const ratios = cashoutRatios(
+      cashout,
+      player?.settings || state.settings,
+    );
     rows.push([
       cashout.createdAt,
       cashout.date,
@@ -315,6 +395,10 @@ export function exportCsv(state) {
       "",
       "",
       -cashout.amount,
+      ratios.gralatsPerTro,
+      ratios.shovelTro,
+      ratios.phpTro,
+      ratios.phpAmount,
     ]);
   });
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
