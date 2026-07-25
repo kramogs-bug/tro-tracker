@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Save,
   Settings,
+  Share2,
   Trash2,
   Upload,
   UserPlus,
@@ -27,7 +28,19 @@ import {
 } from "lucide-react";
 import AccountModal from "./AccountModal.jsx";
 import GmailAccountsTab from "./GmailAccountsTab.jsx";
+import {
+  OverallProfitInsights,
+  SharedProfitSummary,
+} from "./ProfitInsights.jsx";
 import { SHELL_ITEMS } from "./sellablesData.js";
+import {
+  buildOverallGainAnalytics,
+  buildPlayerProfitSnapshot,
+  createProfitShareUrl,
+  gainChangeRatio,
+  playerFirstInputAt,
+  readProfitSnapshot,
+} from "./profitAnalytics.js";
 import {
   cashoutRatios,
   createId,
@@ -65,6 +78,20 @@ function download(content, name, type) {
   link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const field = document.createElement("textarea");
+  field.value = value;
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  field.select();
+  document.execCommand("copy");
+  field.remove();
 }
 function displayTimestamp(value) {
   return new Date(value).toLocaleString("en-PH", {
@@ -574,7 +601,13 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
   );
 }
 
-function PlayerHeader({ player, activeTab, onTabChange, onBack }) {
+function PlayerHeader({
+  player,
+  firstInputAt,
+  activeTab,
+  onTabChange,
+  onBack,
+}) {
   return (
     <>
       <button
@@ -590,7 +623,9 @@ function PlayerHeader({ player, activeTab, onTabChange, onBack }) {
         </p>
         <h1 className="text-3xl font-bold">{player.name}</h1>
         <p className="mt-1 text-xs text-[#659287]">
-          Player added: {displayTimestamp(player.createdAt)}
+          First input:{" "}
+          {firstInputAt ? displayTimestamp(firstInputAt) : "No saved input yet"}
+          {" · "}Player added: {displayTimestamp(player.createdAt)}
         </p>
       </header>
       <div
@@ -659,6 +694,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   const [cashoutDate, setCashoutDate] = useState(localDate);
   const [note, setNote] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [shareFeedback, setShareFeedback] = useState("");
   const now = new Date();
   const today = localDate(now);
   const previousDay = new Date(now);
@@ -706,7 +742,38 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   const remainingTro = allTimeProfit.netTro - cashoutTro;
   const differenceTro = todayProfit.netTro - yesterdayProfit.netTro;
   const differencePhp = todayProfit.netPhp - yesterdayProfit.netPhp;
+  const dailyGainRatio = gainChangeRatio(
+    todayProfit.netPhp,
+    yesterdayProfit.netPhp,
+  );
   const improved = differencePhp >= 0;
+
+  const shareProfitSummary = async () => {
+    const snapshot = buildPlayerProfitSnapshot(player, state);
+    const url = createProfitShareUrl(snapshot);
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `${player.name} · TRO profit summary`,
+          text: `Read-only profit summary for ${player.name}`,
+          url,
+        });
+        setShareFeedback("Profit summary shared.");
+      } else {
+        await copyText(url);
+        setShareFeedback("Share link copied.");
+      }
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        try {
+          await copyText(url);
+          setShareFeedback("Share link copied.");
+        } catch {
+          setShareFeedback("Hindi ma-copy ang link sa browser na ito.");
+        }
+      }
+    }
+  };
 
   const addCashout = (event) => {
     event.preventDefault();
@@ -737,6 +804,27 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
 
   return (
     <div className="mt-6">
+      <section className="mb-5 flex flex-col justify-between gap-3 rounded-2xl border border-[#B1D3B9] bg-white p-4 sm:flex-row sm:items-center">
+        <div>
+          <h2 className="font-bold">Share profit summary</h2>
+          <p className="mt-1 text-xs text-[#659287]">
+            Creates a read-only snapshot link with totals only—no raw entries or
+            account access.
+          </p>
+          {shareFeedback ? (
+            <p className="mt-2 text-xs font-bold text-[#527A70]">
+              {shareFeedback}
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={shareProfitSummary}
+          className={primary}
+        >
+          <Share2 size={16} /> Share summary
+        </button>
+      </section>
       <section className="grid gap-4 lg:grid-cols-[1fr_1fr_1.15fr]">
         <ProfitDayCard
           title="Today"
@@ -772,6 +860,14 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
           </p>
           <p className="mt-2 text-2xl font-bold">
             {formatPeso(differencePhp, true)}
+          </p>
+          <p className="mt-3 inline-flex rounded-full bg-white/15 px-3 py-1.5 text-sm font-bold">
+            Daily gain ratio:{" "}
+            {dailyGainRatio === null
+              ? todayProfit.netPhp >= 0
+                ? "New gain"
+                : "New loss"
+              : `${dailyGainRatio > 0 ? "+" : ""}${format(dailyGainRatio, 1)}%`}
           </p>
           <p className="mt-5 text-sm text-white/80">
             Based on net profit after shovel deductions.
@@ -945,6 +1041,10 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   const [editingBatchId, setEditingBatchId] = useState(null);
   const [activeTab, setActiveTab] = useState("calculator");
   const [feedback, setFeedback] = useState("");
+  const firstInputAt = useMemo(
+    () => playerFirstInputAt(rawState.transactions, player.id),
+    [player.id, rawState.transactions],
+  );
   const entryDate = /^\d{4}-\d{2}-\d{2}/.test(entryTimestamp)
     ? entryTimestamp.slice(0, 10)
     : localDate();
@@ -1070,6 +1170,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
       <>
         <PlayerHeader
           player={player}
+          firstInputAt={firstInputAt}
           activeTab={activeTab}
           onTabChange={setActiveTab}
           onBack={onBack}
@@ -1087,6 +1188,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
     <>
       <PlayerHeader
         player={player}
+        firstInputAt={firstInputAt}
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onBack={onBack}
@@ -1345,7 +1447,14 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
                   ) : null}
                 </div>
                 <div className="flex items-center justify-end gap-2">
-                  <strong>{format(summary.netTro)} TRO</strong>
+                  <span className="min-w-28 text-right">
+                    <strong className="block">
+                      {format(summary.netTro)} TRO
+                    </strong>
+                    <small className="font-bold text-[#527A70]">
+                      {formatPeso(summary.netPhp)} net
+                    </small>
+                  </span>
                   <button
                     type="button"
                     onClick={() => setEditingBatchId(batch[0].batchId)}
@@ -1395,7 +1504,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
   );
 }
 
-export default function App() {
+function TrackerApp() {
   const [state, setState] = useState(loadState);
   const [selectedId, setSelectedId] = useState(null);
   const [mainTab, setMainTab] = useState("tracker");
@@ -1404,28 +1513,21 @@ export default function App() {
   const importRef = useRef(null);
   const cloud = useCloudTracker(state, setState);
   useEffect(() => saveState(state), [state]);
-  const playerSummaries = useMemo(
-    () =>
-      state.players.map((player) => ({
-        player,
-        summary: summarize(
-          state.transactions.filter((entry) => entry.playerId === player.id),
-          player.settings || state.settings,
-        ),
-      })),
+  const gainAnalytics = useMemo(
+    () => buildOverallGainAnalytics(state),
     [state],
   );
   const total = useMemo(
     () =>
-      playerSummaries.reduce(
+      gainAnalytics.ranked.reduce(
         (sum, row) => ({
-          gralats: sum.gralats + row.summary.gralats,
-          grossTro: sum.grossTro + row.summary.grossTro,
-          shovels: sum.shovels + row.summary.shovels,
-          deduction: sum.deduction + row.summary.deduction,
-          netTro: sum.netTro + row.summary.netTro,
-          shovelPhp: sum.shovelPhp + row.summary.deductionPhp,
-          php: sum.php + row.summary.netPhp,
+          gralats: sum.gralats + row.allTime.gralats,
+          grossTro: sum.grossTro + row.allTime.grossTro,
+          shovels: sum.shovels + row.allTime.shovels,
+          deduction: sum.deduction + row.allTime.deduction,
+          netTro: sum.netTro + row.allTime.netTro,
+          shovelPhp: sum.shovelPhp + row.allTime.deductionPhp,
+          php: sum.php + row.allTime.netPhp,
         }),
         {
           gralats: 0,
@@ -1437,7 +1539,14 @@ export default function App() {
           shovelPhp: 0,
         },
       ),
-    [playerSummaries],
+    [gainAnalytics],
+  );
+  const gainAnalyticsByPlayer = useMemo(
+    () =>
+      new Map(
+        gainAnalytics.ranked.map((row) => [row.player.id, row]),
+      ),
+    [gainAnalytics],
   );
   const selected = state.players.find((player) => player.id === selectedId);
   const gmailCountsByPlayer = useMemo(() => {
@@ -1637,14 +1746,14 @@ export default function App() {
                 icon={<Banknote size={19} />}
               />
             </div>
+            <OverallProfitInsights
+              analytics={gainAnalytics}
+              onOpenPlayer={setSelectedId}
+            />
             <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {state.players.map((player) => {
-                const playerTotal = summarize(
-                  state.transactions.filter(
-                    (entry) => entry.playerId === player.id,
-                  ),
-                  player.settings || state.settings,
-                );
+                const playerAnalytics = gainAnalyticsByPlayer.get(player.id);
+                const playerTotal = playerAnalytics?.allTime;
                 const linkedGmailCount = gmailCountsByPlayer.get(player.id) || 0;
                 return (
                   <article
@@ -1669,6 +1778,11 @@ export default function App() {
                         </span>
                       </div>
                       <h2 className="mt-4 font-bold">{player.name}</h2>
+                      <p className="mt-1 text-xs text-[#659287]">
+                        {playerAnalytics?.firstInputAt
+                          ? `First input ${displayTimestamp(playerAnalytics.firstInputAt)}`
+                          : "No saved input yet"}
+                      </p>
                       <p className="mt-1 text-xs text-[#659287]">
                         Added {displayTimestamp(player.createdAt)}
                       </p>
@@ -1776,5 +1890,14 @@ export default function App() {
         <AccountModal onClose={() => setAccountOpen(false)} />
       ) : null}
     </main>
+  );
+}
+
+export default function App() {
+  const sharedSnapshot = readProfitSnapshot();
+  return sharedSnapshot ? (
+    <SharedProfitSummary snapshot={sharedSnapshot} />
+  ) : (
+    <TrackerApp />
   );
 }
