@@ -8,6 +8,7 @@ import {
   Calculator,
   Cloud,
   CloudOff,
+  Copy,
   Download,
   FileDown,
   LogOut,
@@ -90,7 +91,10 @@ async function copyText(value) {
   field.style.opacity = "0";
   document.body.append(field);
   field.select();
-  document.execCommand("copy");
+  if (!document.execCommand("copy")) {
+    field.remove();
+    throw new Error("Clipboard copy failed");
+  }
   field.remove();
 }
 function displayTimestamp(value) {
@@ -748,9 +752,20 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   );
   const improved = differencePhp >= 0;
 
+  const currentProfitShareUrl = () =>
+    createProfitShareUrl(buildPlayerProfitSnapshot(player, state));
+
+  const copyProfitSummaryLink = async () => {
+    try {
+      await copyText(currentProfitShareUrl());
+      setShareFeedback("Share link copied. Pwede mo na itong i-paste.");
+    } catch {
+      setShareFeedback("Hindi ma-copy ang link sa browser na ito.");
+    }
+  };
+
   const shareProfitSummary = async () => {
-    const snapshot = buildPlayerProfitSnapshot(player, state);
-    const url = createProfitShareUrl(snapshot);
+    const url = currentProfitShareUrl();
     try {
       if (navigator.share) {
         await navigator.share({
@@ -817,13 +832,22 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={shareProfitSummary}
-          className={primary}
-        >
-          <Share2 size={16} /> Share summary
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={copyProfitSummaryLink}
+            className={soft}
+          >
+            <Copy size={16} /> Copy link
+          </button>
+          <button
+            type="button"
+            onClick={shareProfitSummary}
+            className={primary}
+          >
+            <Share2 size={16} /> Share
+          </button>
+        </div>
       </section>
       <section className="grid gap-4 lg:grid-cols-[1fr_1fr_1.15fr]">
         <ProfitDayCard
