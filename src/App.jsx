@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import AccountModal from "./AccountModal.jsx";
 import GmailAccountsTab from "./GmailAccountsTab.jsx";
+import TradeScreenshotScanner from "./TradeScreenshotScanner.jsx";
 import {
   OverallProfitInsights,
   SharedProfitSummary,
@@ -1216,6 +1217,23 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onBack={onBack}
+      />
+      <TradeScreenshotScanner
+        onApply={({ quantities: detected, shovels: detectedShovels, capturedAt }) => {
+          setQuantities(
+            Object.fromEntries(
+              SHELL_ITEMS.map((item) => [
+                item.name,
+                detected[item.name] ? String(detected[item.name]) : "",
+              ]),
+            ),
+          );
+          setShovels(detectedShovels ? String(detectedShovels) : "");
+          if (capturedAt) setEntryTimestamp(capturedAt);
+          setFeedback(
+            "Screenshot values applied. Review the totals, then save the entry.",
+          );
+        }}
       />
       <label className="mt-5 block max-w-xl rounded-2xl border border-[#B1D3B9] bg-white p-4 text-sm font-bold">
         <span className="flex items-center gap-2">
