@@ -115,7 +115,11 @@ export default function TradeScreenshotScanner({ onApply }) {
         </div>
         <button
           type="button"
-          onClick={() => inputRef.current?.click()}
+          onClick={() => {
+            if (!inputRef.current) return;
+            inputRef.current.value = "";
+            inputRef.current.click();
+          }}
           className={primary}
           disabled={Boolean(progress)}
         >
@@ -126,11 +130,7 @@ export default function TradeScreenshotScanner({ onApply }) {
           type="file"
           accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
           className="hidden"
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0];
-            event.currentTarget.value = "";
-            void chooseFile(file);
-          }}
+          onChange={(event) => void chooseFile(event.currentTarget.files?.[0])}
         />
       </div>
 
