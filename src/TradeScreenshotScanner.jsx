@@ -124,9 +124,13 @@ export default function TradeScreenshotScanner({ onApply }) {
         <input
           ref={inputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
           className="hidden"
-          onChange={(event) => void chooseFile(event.target.files?.[0])}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            void chooseFile(file);
+          }}
         />
       </div>
 
