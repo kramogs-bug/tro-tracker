@@ -44,6 +44,18 @@ const SCAN_WINDOWS = [0, 0.14, 0.28, 0.42, 0.56, 0.7].map((left) => ({
   width: 0.3,
   height: 0.86,
 }));
+const OCR_MODES = [
+  {
+    name: "balanced",
+    filter: "contrast(135%) saturate(70%)",
+  },
+  {
+    name: "monochrome",
+    filter: "grayscale(100%) contrast(185%)",
+  },
+];
+const RESULT_FIELDS = [...ITEM_DEFINITIONS.map((item) => item.name), "Shovels"];
+const CALIBRATION_STORAGE_KEY = "tro-trade-ocr-calibration-v1";
 
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/jpeg",
@@ -59,6 +71,40 @@ export function isSupportedTradeImage(file) {
   const type = String(file.type || "").toLowerCase();
   const name = String(file.name || "");
   return SUPPORTED_IMAGE_TYPES.has(type) || SUPPORTED_IMAGE_EXTENSION.test(name);
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function calibrationLayoutKey(image) {
+  const aspectRatio = image.width / image.height;
+  const orientation = image.width >= image.height ? "landscape" : "portrait";
+  return `${orientation}:${aspectRatio.toFixed(1)}`;
+}
+
+function readCalibration() {
+  try {
+    const parsed = JSON.parse(
+      globalThis.localStorage?.getItem(CALIBRATION_STORAGE_KEY) || "{}",
+    );
+    return parsed?.profiles && typeof parsed.profiles === "object"
+      ? parsed
+      : { version: 1, profiles: {} };
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
+
+function calibrationProfile(layoutKey) {
+  return readCalibration().profiles[layoutKey] || {
+    windows: {},
+    modes: {},
+  };
+}
+
+function learnedScore(profile, group, key) {
+  return clamp(Number(profile?.[group]?.[key]) || 0, -8, 8);
 }
 
 function normalizeOcrDigit(character) {
@@ -170,9 +216,21 @@ function selectTokenSource(text, numericText) {
   return textTokens;
 }
 
+function quantityTokenAgreement(first, second) {
+  if (!first.length || !second.length) return null;
+  if (first.length !== second.length) return 0;
+  const matches = first.reduce(
+    (total, token, index) =>
+      total + (token.value === second[index]?.value ? 1 : 0),
+    0,
+  );
+  return matches / first.length;
+}
+
 export function parseTradeOcrText(text, numericText = text) {
   const source = String(text || "").toLowerCase();
   const textTokens = extractQuantityTokens(source);
+  const numericTokens = extractQuantityTokens(numericText || "");
   const selectedTokens = selectTokenSource(source, numericText);
   const named = namedQuantities(source, textTokens);
   const quantities = Object.fromEntries(
@@ -212,12 +270,27 @@ export function parseTradeOcrText(text, numericText = text) {
   const detectedItemCount = Object.values(quantities).filter(
     (value) => value > 0,
   ).length;
-  const confidence = Math.min(
-    99,
-    named.namedCount * 13 +
-      detectedItemCount * 6 +
-      (selectedTokens.length >= 5 ? 8 : 0),
+  const valueAgreement = quantityTokenAgreement(textTokens, numericTokens);
+  const coverageRatio = detectedItemCount / ITEM_DEFINITIONS.length;
+  const namedRatio = named.namedCount / ITEM_DEFINITIONS.length;
+  const tokenShapeScore = [5, 6].includes(selectedTokens.length)
+    ? 1
+    : selectedTokens.length >= 4
+      ? 0.5
+      : 0;
+  let confidence = Math.round(
+    coverageRatio * 35 +
+      namedRatio * 25 +
+      tokenShapeScore * 10 +
+      (valueAgreement ?? 0.5) * 30,
   );
+  if (valueAgreement !== null && valueAgreement < 1) {
+    confidence -= Math.round((1 - valueAgreement) * 60);
+  }
+  if (valueAgreement === null) {
+    confidence = Math.min(confidence, 78);
+  }
+  confidence = clamp(confidence, 0, 98);
   const warnings = [];
   if (detectedItemCount < ITEM_DEFINITIONS.length) {
     warnings.push(
@@ -229,6 +302,11 @@ export function parseTradeOcrText(text, numericText = text) {
       "Few item names were readable, so fixed top-to-bottom shell order was used.",
     );
   }
+  if (valueAgreement !== null && valueAgreement < 1) {
+    warnings.push(
+      "OCR passes disagreed on one or more quantities. Review the highlighted fields.",
+    );
+  }
 
   return {
     quantities,
@@ -237,6 +315,7 @@ export function parseTradeOcrText(text, numericText = text) {
     namedItemCount: named.namedCount,
     detectedItemCount,
     quantityTokenCount: selectedTokens.length,
+    valueAgreement,
     warnings,
     rawText: String(text || "").trim(),
     numericText: String(numericText || "").trim(),
@@ -292,7 +371,7 @@ async function loadImage(file) {
   };
 }
 
-function createScanCanvas(image, window) {
+function createScanCanvas(image, window, mode = OCR_MODES[0]) {
   const sourceLeft = Math.round(image.width * window.left);
   const sourceTop = Math.round(image.height * window.top);
   const sourceWidth = Math.min(
@@ -310,7 +389,7 @@ function createScanCanvas(image, window) {
   const context = canvas.getContext("2d", { willReadFrequently: false });
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
-  context.filter = "contrast(135%) saturate(70%)";
+  context.filter = mode.filter;
   context.drawImage(
     image.source,
     sourceLeft,
@@ -323,6 +402,99 @@ function createScanCanvas(image, window) {
     canvas.height,
   );
   return canvas;
+}
+
+function resultFieldValue(result, field) {
+  return field === "Shovels"
+    ? Number(result.shovels) || 0
+    : Number(result.quantities?.[field]) || 0;
+}
+
+function candidateRank(candidate) {
+  return (
+    candidate.parsed.confidence * 0.65 +
+    candidate.engineConfidence * 0.3 +
+    candidate.learnedModeScore
+  );
+}
+
+function buildFieldConfidence(selected, candidates) {
+  return Object.fromEntries(
+    RESULT_FIELDS.map((field) => {
+      const selectedValue = resultFieldValue(selected.parsed, field);
+      const values = candidates.map((candidate) =>
+        resultFieldValue(candidate.parsed, field),
+      );
+      const passesAgree = values.every((value) => value === selectedValue);
+      if (
+        field === "Shovels" &&
+        selectedValue === 0 &&
+        passesAgree &&
+        selected.parsed.quantityTokenCount === ITEM_DEFINITIONS.length
+      ) {
+        return [field, 88];
+      }
+      if (!selectedValue) return [field, 28];
+      let confidence = passesAgree
+        ? 72 + selected.engineConfidence * 0.25
+        : 38 + selected.engineConfidence * 0.2;
+      if (
+        selected.parsed.valueAgreement !== null &&
+        selected.parsed.valueAgreement < 1
+      ) {
+        confidence = Math.min(confidence, 68);
+      }
+      return [field, Math.round(clamp(confidence, 0, 98))];
+    }),
+  );
+}
+
+export function recordTradeScanFeedback(result, corrected) {
+  const learning = result?.learning;
+  if (!learning?.layoutKey) return null;
+  const fields = RESULT_FIELDS.filter(
+    (field) =>
+      field !== "Shovels" ||
+      resultFieldValue(result, field) > 0 ||
+      resultFieldValue(corrected, field) > 0,
+  );
+  const matches = fields.filter(
+    (field) =>
+      resultFieldValue(result, field) === resultFieldValue(corrected, field),
+  ).length;
+  const accuracy = fields.length ? matches / fields.length : 0;
+  const reward = (accuracy - 0.5) * 16;
+  const calibration = readCalibration();
+  const profile = calibration.profiles[learning.layoutKey] || {
+    windows: {},
+    modes: {},
+  };
+  const updateScore = (current) =>
+    clamp((Number(current) || 0) * 0.65 + reward * 0.35, -8, 8);
+  profile.windows[learning.windowIndex] = updateScore(
+    profile.windows[learning.windowIndex],
+  );
+  profile.modes[learning.mode] = updateScore(profile.modes[learning.mode]);
+  profile.updatedAt = Date.now();
+  calibration.profiles[learning.layoutKey] = profile;
+  calibration.version = 1;
+  calibration.profiles = Object.fromEntries(
+    Object.entries(calibration.profiles)
+      .toSorted(
+        (first, second) =>
+          Number(second[1].updatedAt || 0) - Number(first[1].updatedAt || 0),
+      )
+      .slice(0, 12),
+  );
+  try {
+    globalThis.localStorage?.setItem(
+      CALIBRATION_STORAGE_KEY,
+      JSON.stringify(calibration),
+    );
+  } catch {
+    // Local learning is optional when browser storage is unavailable.
+  }
+  return { accuracy, learned: true };
 }
 
 function capturedAtFromFilename(filename) {
@@ -342,6 +514,9 @@ export async function scanTradeScreenshot(file, onProgress = () => {}) {
   }
   const image = await loadImage(file);
   const aspectRatio = image.width / image.height;
+  const layoutKey = calibrationLayoutKey(image);
+  const profile = calibrationProfile(layoutKey);
+  const totalOcrJobs = SCAN_WINDOWS.length + OCR_MODES.length;
   let worker;
   let activeJob = -1;
   try {
@@ -355,7 +530,7 @@ export async function scanTradeScreenshot(file, onProgress = () => {}) {
           progress:
             0.15 +
             ((completedJobs + Number(message.progress || 0)) /
-              (SCAN_WINDOWS.length + 1)) *
+              totalOcrJobs) *
               0.8,
           status: "Reading trade quantities",
         });
@@ -369,12 +544,22 @@ export async function scanTradeScreenshot(file, onProgress = () => {}) {
     let best = null;
     for (let index = 0; index < SCAN_WINDOWS.length; index += 1) {
       activeJob = index;
-      const canvas = createScanCanvas(image, SCAN_WINDOWS[index]);
+      const canvas = createScanCanvas(
+        image,
+        SCAN_WINDOWS[index],
+        OCR_MODES[0],
+      );
       const result = await worker.recognize(canvas);
+      const learnedWindowScore = learnedScore(
+        profile,
+        "windows",
+        String(index),
+      );
       const candidate = {
         canvas,
         text: result.data.text,
-        score: scoreOcrText(result.data.text),
+        score: scoreOcrText(result.data.text) + learnedWindowScore,
+        ocrConfidence: clamp(Number(result.data.confidence) || 0, 0, 100),
         index,
       };
       if (!best || candidate.score > best.score) {
@@ -382,14 +567,66 @@ export async function scanTradeScreenshot(file, onProgress = () => {}) {
       }
     }
 
-    activeJob = SCAN_WINDOWS.length;
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.SPARSE_TEXT,
       tessedit_char_whitelist: "xX0123456789,",
       preserve_interword_spaces: "1",
     });
-    const numericResult = await worker.recognize(best.canvas);
-    const parsed = parseTradeOcrText(best.text, numericResult.data.text);
+    const numericCandidates = [];
+    for (let index = 0; index < OCR_MODES.length; index += 1) {
+      activeJob = SCAN_WINDOWS.length + index;
+      const mode = OCR_MODES[index];
+      const canvas =
+        index === 0
+          ? best.canvas
+          : createScanCanvas(image, SCAN_WINDOWS[best.index], mode);
+      const numericResult = await worker.recognize(canvas);
+      const engineConfidence = clamp(
+        (best.ocrConfidence +
+          (Number(numericResult.data.confidence) || 0)) /
+          2,
+        0,
+        100,
+      );
+      numericCandidates.push({
+        mode: mode.name,
+        parsed: parseTradeOcrText(best.text, numericResult.data.text),
+        engineConfidence,
+        learnedModeScore: learnedScore(profile, "modes", mode.name),
+      });
+    }
+    const selected = numericCandidates.toSorted(
+      (first, second) => candidateRank(second) - candidateRank(first),
+    )[0];
+    const parsed = selected.parsed;
+    const fieldConfidence = buildFieldConfidence(
+      selected,
+      numericCandidates,
+    );
+    const confidenceFields = RESULT_FIELDS.filter(
+      (field) => field !== "Shovels" || parsed.shovels > 0,
+    ).map((field) => fieldConfidence[field]);
+    const averageFieldConfidence =
+      confidenceFields.reduce((total, value) => total + value, 0) /
+      confidenceFields.length;
+    const minimumFieldConfidence = Math.min(...confidenceFields);
+    parsed.confidence = Math.min(
+      parsed.confidence,
+      Math.round(
+        averageFieldConfidence * 0.6 + minimumFieldConfidence * 0.4,
+      ),
+    );
+    parsed.fieldConfidence = fieldConfidence;
+    const uncertainFields = RESULT_FIELDS.filter(
+      (field) =>
+        fieldConfidence[field] < 75 &&
+        (field !== "Shovels" || parsed.shovels > 0),
+    );
+    if (uncertainFields.length) {
+      parsed.warnings.push(
+        `Low OCR agreement for: ${uncertainFields.join(", ")}. Review these values.`,
+      );
+    }
     if (aspectRatio < 1.9 || aspectRatio > 2.4) {
       parsed.warnings.push(
         "This screenshot is unusually narrow or tall; detection may be less accurate.",
@@ -403,8 +640,14 @@ export async function scanTradeScreenshot(file, onProgress = () => {}) {
     onProgress({ progress: 1, status: "Detection complete" });
     return {
       ...parsed,
+      warnings: [...new Set(parsed.warnings)],
       capturedAt: capturedAtFromFilename(file.name),
       image: { width: image.width, height: image.height },
+      learning: {
+        layoutKey,
+        windowIndex: best.index,
+        mode: selected.mode,
+      },
     };
   } finally {
     image.release();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -29,6 +29,23 @@ function detectedValues(result) {
   };
 }
 
+async function createStableUpload(file) {
+  const bytes = await file.arrayBuffer();
+  return new File([bytes], file.name, {
+    type: file.type,
+    lastModified: file.lastModified,
+  });
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function TradeScreenshotScanner({ onApply }) {
   const inputRef = useRef(null);
   const scanIdRef = useRef(0);
@@ -38,26 +55,22 @@ export default function TradeScreenshotScanner({ onApply }) {
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState("");
 
-  useEffect(
-    () => () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    },
-    [previewUrl],
-  );
-
   const chooseFile = async (file) => {
     if (!file) return;
     const scanId = scanIdRef.current + 1;
     scanIdRef.current = scanId;
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(URL.createObjectURL(file));
+    setPreviewUrl("");
     setResult(null);
     setValues(null);
     setError("");
     setProgress({ progress: 0, status: "Preparing screenshot" });
     try {
+      const stableFile = await createStableUpload(file);
+      const nextPreviewUrl = await fileToDataUrl(stableFile);
+      if (scanIdRef.current !== scanId) return;
+      setPreviewUrl(nextPreviewUrl);
       const { scanTradeScreenshot } = await import("./tradeImageDetector.js");
-      const next = await scanTradeScreenshot(file, (update) => {
+      const next = await scanTradeScreenshot(stableFile, (update) => {
         if (scanIdRef.current === scanId) setProgress(update);
       });
       if (scanIdRef.current !== scanId) return;
@@ -73,7 +86,6 @@ export default function TradeScreenshotScanner({ onApply }) {
 
   const clear = () => {
     scanIdRef.current += 1;
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl("");
     setResult(null);
     setValues(null);
@@ -95,6 +107,11 @@ export default function TradeScreenshotScanner({ onApply }) {
       setError("No detected quantity to apply.");
       return;
     }
+    void import("./tradeImageDetector.js")
+      .then(({ recordTradeScanFeedback }) =>
+        recordTradeScanFeedback(result, { quantities, shovels }),
+      )
+      .catch(() => {});
     onApply({ quantities, shovels, capturedAt: result?.capturedAt || null });
     clear();
   };
@@ -160,6 +177,14 @@ export default function TradeScreenshotScanner({ onApply }) {
         </p>
       ) : null}
 
+      {previewUrl && !(result && values) ? (
+        <img
+          src={previewUrl}
+          alt="Uploaded trade screenshot preview"
+          className="mt-4 max-h-64 w-full rounded-xl border border-[#E6F2DD] object-contain"
+        />
+      ) : null}
+
       {result && values ? (
         <div className="mt-5">
           <div className="flex items-start justify-between gap-3">
@@ -189,7 +214,14 @@ export default function TradeScreenshotScanner({ onApply }) {
                   key={item.name}
                   className="rounded-xl bg-[#F8FBF5] p-3 text-xs font-bold text-[#527A70]"
                 >
-                  {item.name}
+                  <span className="flex items-center justify-between gap-2">
+                    {item.name}
+                    {(result.fieldConfidence?.[item.name] || 0) < 75 ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+                        Review
+                      </span>
+                    ) : null}
+                  </span>
                   <input
                     type="number"
                     min="0"
@@ -210,7 +242,14 @@ export default function TradeScreenshotScanner({ onApply }) {
                 </label>
               ))}
               <label className="rounded-xl bg-[#F8FBF5] p-3 text-xs font-bold text-[#527A70]">
-                Shovels
+                <span className="flex items-center justify-between gap-2">
+                  Shovels
+                  {(result.fieldConfidence?.Shovels || 0) < 75 ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
+                      Review
+                    </span>
+                  ) : null}
+                </span>
                 <input
                   type="number"
                   min="0"
@@ -245,6 +284,10 @@ export default function TradeScreenshotScanner({ onApply }) {
               <CheckCircle2 size={16} /> Apply detected values
             </button>
           </div>
+          <p className="mt-3 text-center text-xs text-[#659287]">
+            Corrections teach this browser which scan area and OCR mode work
+            best. Images and quantities are not stored for training.
+          </p>
         </div>
       ) : null}
     </section>
