@@ -38,11 +38,11 @@ const ITEM_DEFINITIONS = [
   },
 ];
 
-const SCAN_WINDOWS = [0.17, 0.27, 0.38, 0.48, 0.58].map((left) => ({
+const SCAN_WINDOWS = [0, 0.14, 0.28, 0.42, 0.56, 0.7].map((left) => ({
   left,
-  top: 0.18,
+  top: 0.02,
   width: 0.3,
-  height: 0.61,
+  height: 0.86,
 }));
 
 const SUPPORTED_IMAGE_TYPES = new Set([
@@ -254,18 +254,36 @@ function scoreOcrText(text) {
 
 async function loadImage(file) {
   if ("createImageBitmap" in globalThis) {
-    const bitmap = await createImageBitmap(file);
-    return {
-      source: bitmap,
-      width: bitmap.width,
-      height: bitmap.height,
-      release: () => bitmap.close(),
-    };
+    try {
+      const bitmap = await createImageBitmap(file);
+      return {
+        source: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        release: () => bitmap.close(),
+      };
+    } catch {
+      // Some Android browsers expose createImageBitmap but cannot decode
+      // gallery-backed JPG blobs with it. Fall through to HTMLImageElement.
+    }
   }
+
   const url = URL.createObjectURL(file);
   const image = new Image();
+  image.decoding = "async";
   image.src = url;
-  await image.decode();
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () =>
+        reject(new Error("The browser could not decode this image."));
+    });
+  } catch {
+    URL.revokeObjectURL(url);
+    throw new Error(
+      "Could not open this screenshot. Try saving or sharing it as a new JPG or PNG, then upload that copy.",
+    );
+  }
   return {
     source: image,
     width: image.naturalWidth,
@@ -374,7 +392,7 @@ export async function scanTradeScreenshot(file, onProgress = () => {}) {
     const parsed = parseTradeOcrText(best.text, numericResult.data.text);
     if (aspectRatio < 1.9 || aspectRatio > 2.4) {
       parsed.warnings.push(
-        "The screenshot aspect ratio differs from the samples; detection may be less accurate.",
+        "This screenshot is unusually narrow or tall; detection may be less accurate.",
       );
     }
     if (!parsed.detectedItemCount) {
