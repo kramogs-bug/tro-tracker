@@ -45,6 +45,22 @@ const SCAN_WINDOWS = [0.17, 0.27, 0.38, 0.48, 0.58].map((left) => ({
   height: 0.61,
 }));
 
+const SUPPORTED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/pjpeg",
+  "image/png",
+  "image/webp",
+]);
+const SUPPORTED_IMAGE_EXTENSION = /\.(?:jpe?g|png|webp)$/i;
+
+export function isSupportedTradeImage(file) {
+  if (!(file instanceof Blob)) return false;
+  const type = String(file.type || "").toLowerCase();
+  const name = String(file.name || "");
+  return SUPPORTED_IMAGE_TYPES.has(type) || SUPPORTED_IMAGE_EXTENSION.test(name);
+}
+
 function normalizeOcrDigit(character) {
   return (
     {
@@ -303,8 +319,8 @@ function capturedAtFromFilename(filename) {
 }
 
 export async function scanTradeScreenshot(file, onProgress = () => {}) {
-  if (!(file instanceof Blob) || !file.type.startsWith("image/")) {
-    throw new Error("Choose a valid screenshot image.");
+  if (!isSupportedTradeImage(file)) {
+    throw new Error("Choose a JPG, JPEG, PNG, or WebP screenshot.");
   }
   const image = await loadImage(file);
   const aspectRatio = image.width / image.height;
