@@ -38,9 +38,11 @@ import { SHELL_ITEMS } from "./sellablesData.js";
 import {
   buildOverallGainAnalytics,
   buildPlayerProfitSnapshot,
-  createProfitShareUrl,
+  createProfitShareLink,
   gainChangeRatio,
+  loadProfitShareSnapshot,
   playerFirstInputAt,
+  readProfitShareId,
   readProfitSnapshot,
 } from "./profitAnalytics.js";
 import {
@@ -700,6 +702,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   const [note, setNote] = useState("");
   const [feedback, setFeedback] = useState("");
   const [shareFeedback, setShareFeedback] = useState("");
+  const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
   const now = new Date();
   const today = localDate(now);
   const previousDay = new Date(now);
@@ -753,41 +756,55 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   );
   const improved = differencePhp >= 0;
 
-  const currentProfitShareUrl = () =>
-    createProfitShareUrl(buildPlayerProfitSnapshot(player, state));
+  const currentProfitShareLink = () =>
+    createProfitShareLink(buildPlayerProfitSnapshot(player, state));
 
   const copyProfitSummaryLink = async () => {
+    setIsCreatingShareLink(true);
+    setShareFeedback("Creating short link...");
     try {
-      await copyText(currentProfitShareUrl());
-      setShareFeedback("Share link copied. Pwede mo na itong i-paste.");
+      const share = await currentProfitShareLink();
+      await copyText(share.url);
+      setShareFeedback(
+        share.short
+          ? "Short link copied. Pwede mo na itong i-paste."
+          : "Cloud unavailable. Fallback link copied.",
+      );
     } catch {
       setShareFeedback("Hindi ma-copy ang link sa browser na ito.");
+    } finally {
+      setIsCreatingShareLink(false);
     }
   };
 
   const shareProfitSummary = async () => {
-    const url = currentProfitShareUrl();
+    setIsCreatingShareLink(true);
+    setShareFeedback("Creating short link...");
     try {
+      const share = await currentProfitShareLink();
       if (navigator.share) {
         await navigator.share({
           title: `${player.name} · TRO profit summary`,
           text: `Read-only profit summary for ${player.name}`,
-          url,
+          url: share.url,
         });
-        setShareFeedback("Profit summary shared.");
+        setShareFeedback(
+          share.short
+            ? "Short profit summary shared."
+            : "Profit summary shared using fallback link.",
+        );
       } else {
-        await copyText(url);
-        setShareFeedback("Share link copied.");
+        await copyText(share.url);
+        setShareFeedback(
+          share.short ? "Short link copied." : "Fallback link copied.",
+        );
       }
     } catch (error) {
       if (error?.name !== "AbortError") {
-        try {
-          await copyText(url);
-          setShareFeedback("Share link copied.");
-        } catch {
-          setShareFeedback("Hindi ma-copy ang link sa browser na ito.");
-        }
+        setShareFeedback("Hindi ma-create o ma-share ang link.");
       }
+    } finally {
+      setIsCreatingShareLink(false);
     }
   };
 
@@ -824,8 +841,8 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
         <div>
           <h2 className="font-bold">Share profit summary</h2>
           <p className="mt-1 text-xs text-[#659287]">
-            Creates a read-only snapshot link with totals only—no raw entries or
-            account access.
+            Creates a short read-only snapshot link with totals only—no raw
+            entries or account access. Short links expire after 180 days.
           </p>
           {shareFeedback ? (
             <p className="mt-2 text-xs font-bold text-[#527A70]">
@@ -838,15 +855,19 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
             type="button"
             onClick={copyProfitSummaryLink}
             className={soft}
+            disabled={isCreatingShareLink}
           >
-            <Copy size={16} /> Copy link
+            <Copy size={16} />{" "}
+            {isCreatingShareLink ? "Creating..." : "Copy link"}
           </button>
           <button
             type="button"
             onClick={shareProfitSummary}
             className={primary}
+            disabled={isCreatingShareLink}
           >
-            <Share2 size={16} /> Share
+            <Share2 size={16} />{" "}
+            {isCreatingShareLink ? "Creating..." : "Share"}
           </button>
         </div>
       </section>
@@ -1935,11 +1956,73 @@ function TrackerApp() {
   );
 }
 
-export default function App() {
-  const sharedSnapshot = readProfitSnapshot();
-  return sharedSnapshot ? (
-    <SharedProfitSummary snapshot={sharedSnapshot} />
-  ) : (
-    <TrackerApp />
+function SharedProfitRoute() {
+  const embeddedSnapshot = useMemo(() => readProfitSnapshot(), []);
+  const shareId = useMemo(() => readProfitShareId(), []);
+  const [remoteSnapshot, setRemoteSnapshot] = useState(null);
+  const [shareStatus, setShareStatus] = useState(
+    shareId ? "loading" : "none",
   );
+
+  useEffect(() => {
+    if (!shareId || embeddedSnapshot) return undefined;
+    let active = true;
+    void loadProfitShareSnapshot(shareId)
+      .then((snapshot) => {
+        if (!active) return;
+        setRemoteSnapshot(snapshot);
+        setShareStatus(snapshot ? "ready" : "missing");
+      })
+      .catch(() => {
+        if (active) setShareStatus("missing");
+      });
+    return () => {
+      active = false;
+    };
+  }, [embeddedSnapshot, shareId]);
+
+  const snapshot = embeddedSnapshot || remoteSnapshot;
+  if (snapshot) return <SharedProfitSummary snapshot={snapshot} />;
+  if (!shareId) return <TrackerApp />;
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#E6F2DD] px-4 text-[#29453E]">
+      <section className="w-full max-w-md rounded-3xl border border-[#B1D3B9] bg-white p-7 text-center shadow-sm">
+        {shareStatus === "loading" ? (
+          <>
+            <RefreshCw
+              size={28}
+              className="mx-auto animate-spin text-[#527A70]"
+            />
+            <h1 className="mt-4 text-xl font-bold">
+              Loading profit summary...
+            </h1>
+            <p className="mt-2 text-sm text-[#659287]">
+              Fetching the read-only snapshot.
+            </p>
+          </>
+        ) : (
+          <>
+            <Pickaxe size={30} className="mx-auto text-[#527A70]" />
+            <h1 className="mt-4 text-xl font-bold">
+              Profit summary unavailable
+            </h1>
+            <p className="mt-2 text-sm text-[#659287]">
+              The link may be invalid or expired.
+            </p>
+            <a
+              href="/"
+              className="mt-5 inline-flex rounded-xl bg-[#527A70] px-4 py-2.5 text-sm font-bold text-white"
+            >
+              Open TRO Tracker
+            </a>
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
+export default function App() {
+  return <SharedProfitRoute />;
 }

@@ -4,6 +4,7 @@ import {
   summarize,
   summarizePeriods,
 } from "./tracker.js";
+import { supabase } from "./supabaseClient.js";
 
 const SUMMARY_KEYS = [
   "gralats",
@@ -248,52 +249,127 @@ export function createProfitShareUrl(snapshot, location = window.location) {
   return url.toString();
 }
 
+function sanitizeProfitSnapshot(parsed) {
+  if (
+    parsed?.kind !== "tro-profit-summary" ||
+    parsed.version !== 1 ||
+    typeof parsed.player?.name !== "string"
+  ) {
+    return null;
+  }
+  return {
+    ...parsed,
+    player: {
+      name: parsed.player.name.slice(0, 50),
+      firstInputAt: parsed.player.firstInputAt || null,
+    },
+    summaries: Object.fromEntries(
+      ["today", "yesterday", "week", "month", "allTime"].map((key) => [
+        key,
+        safeSummary(parsed.summaries?.[key]),
+      ]),
+    ),
+    cashout: {
+      php: Number(parsed.cashout?.php) || 0,
+      tro: Number(parsed.cashout?.tro) || 0,
+    },
+    balance: {
+      php: Number(parsed.balance?.php) || 0,
+      tro: Number(parsed.balance?.tro) || 0,
+    },
+    dailyChangeRatio:
+      parsed.dailyChangeRatio === null
+        ? null
+        : Number(parsed.dailyChangeRatio) || 0,
+    dailyHistory: Array.isArray(parsed.dailyHistory)
+      ? parsed.dailyHistory.slice(-7).map((day) => ({
+          date: /^\d{4}-\d{2}-\d{2}$/.test(day?.date || "") ? day.date : "",
+          summary: safeSummary(day?.summary),
+          changeRatio:
+            day?.changeRatio === null ? null : Number(day?.changeRatio) || 0,
+        }))
+      : [],
+  };
+}
+
+function createShareId() {
+  if (!globalThis.crypto?.getRandomValues) return null;
+  const bytes = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(bytes);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+function createShortShareUrl(id, location) {
+  const url = new URL(location.href);
+  url.pathname = `/s/${id}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+export async function createProfitShareLink(
+  snapshot,
+  location = window.location,
+) {
+  if (supabase) {
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const id = createShareId();
+        if (!id) break;
+        const { data, error } = await supabase.rpc("create_profit_share", {
+          p_id: id,
+          p_snapshot: snapshot,
+        });
+        if (!error && data === id) {
+          return {
+            url: createShortShareUrl(id, location),
+            short: true,
+          };
+        }
+      }
+    } catch {
+      // Keep the existing self-contained link as an offline fallback.
+    }
+  }
+  return {
+    url: createProfitShareUrl(snapshot, location),
+    short: false,
+  };
+}
+
+export function readProfitShareId(pathname = window.location.pathname) {
+  const match = String(pathname).match(
+    /^\/s\/([A-Za-z0-9_-]{10,16})\/?$/,
+  );
+  return match?.[1] || null;
+}
+
+export async function loadProfitShareSnapshot(id) {
+  if (!supabase || !/^[A-Za-z0-9_-]{10,16}$/.test(String(id || ""))) {
+    return null;
+  }
+  const { data, error } = await supabase
+    .from("profit_share_snapshots")
+    .select("snapshot")
+    .eq("id", id)
+    .maybeSingle();
+  if (error || !data?.snapshot) return null;
+  return sanitizeProfitSnapshot(data.snapshot);
+}
+
 export function readProfitSnapshot(hash = window.location.hash) {
   try {
     if (!hash.startsWith("#summary=") || hash.length > 30000) return null;
-    const parsed = JSON.parse(decodeUtf8(hash.slice("#summary=".length)));
-    if (
-      parsed?.kind !== "tro-profit-summary" ||
-      parsed.version !== 1 ||
-      typeof parsed.player?.name !== "string"
-    ) {
-      return null;
-    }
-    return {
-      ...parsed,
-      player: {
-        name: parsed.player.name.slice(0, 50),
-        firstInputAt: parsed.player.firstInputAt || null,
-      },
-      summaries: Object.fromEntries(
-        ["today", "yesterday", "week", "month", "allTime"].map((key) => [
-          key,
-          safeSummary(parsed.summaries?.[key]),
-        ]),
-      ),
-      cashout: {
-        php: Number(parsed.cashout?.php) || 0,
-        tro: Number(parsed.cashout?.tro) || 0,
-      },
-      balance: {
-        php: Number(parsed.balance?.php) || 0,
-        tro: Number(parsed.balance?.tro) || 0,
-      },
-      dailyChangeRatio:
-        parsed.dailyChangeRatio === null
-          ? null
-          : Number(parsed.dailyChangeRatio) || 0,
-      dailyHistory: Array.isArray(parsed.dailyHistory)
-        ? parsed.dailyHistory.slice(-7).map((day) => ({
-            date: /^\d{4}-\d{2}-\d{2}$/.test(day?.date || "")
-              ? day.date
-              : "",
-            summary: safeSummary(day?.summary),
-            changeRatio:
-              day?.changeRatio === null ? null : Number(day?.changeRatio) || 0,
-          }))
-        : [],
-    };
+    return sanitizeProfitSnapshot(
+      JSON.parse(decodeUtf8(hash.slice("#summary=".length))),
+    );
   } catch {
     return null;
   }
