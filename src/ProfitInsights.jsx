@@ -1,13 +1,13 @@
 import {
-  ArrowDownRight,
-  ArrowUpRight,
-  CalendarDays,
-  Crown,
+  Banknote,
+  CheckCircle2,
+  Clock3,
   ExternalLink,
   Pickaxe,
   Printer,
-  Trophy,
+  WalletCards,
 } from "lucide-react";
+import { PAYOUT_THRESHOLD_PHP } from "./profitAnalytics.js";
 import { format } from "./tracker.js";
 
 function displayTimestamp(value) {
@@ -31,158 +31,179 @@ function peso(value, showPositive = false) {
   return `${sign}₱${format(Math.abs(amount))}`;
 }
 
-function ratioLabel(value, current) {
-  if (value === null) {
-    if (current > 0) return "New gain";
-    if (current < 0) return "New loss";
-    return "No baseline";
-  }
-  return `${value > 0 ? "+" : ""}${format(value, 1)}%`;
+function payoutDetails(balancePhp, threshold = PAYOUT_THRESHOLD_PHP) {
+  const balance = Math.round((Number(balancePhp) || 0) * 100) / 100;
+  const payoutsReady = Math.max(0, Math.floor(balance / threshold));
+  return {
+    balance,
+    payoutsReady,
+    isReady: payoutsReady > 0,
+    amountNeeded:
+      Math.round(Math.max(0, threshold - balance) * 100) / 100,
+    progress: Math.min(100, Math.max(0, (balance / threshold) * 100)),
+  };
 }
 
-function RatioBadge({ value, current }) {
-  const improved = value === null ? current >= 0 : value >= 0;
+function BalanceProgress({
+  balancePhp,
+  threshold = PAYOUT_THRESHOLD_PHP,
+  dark = false,
+}) {
+  const details = payoutDetails(balancePhp, threshold);
+  const mutedText = dark ? "text-[#B1D3B9]" : "text-[#659287]";
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold ${
-        improved
-          ? "bg-[#E6F2DD] text-[#527A70]"
-          : "bg-red-50 text-red-700"
-      }`}
-    >
-      {improved ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-      {ratioLabel(value, current)}
-    </span>
+    <div>
+      <div className="flex items-center justify-between gap-3 text-xs font-bold">
+        <span className={details.isReady ? "" : mutedText}>
+          {details.isReady
+            ? details.payoutsReady === 1
+              ? "Ready for ₱500 payout"
+              : `${details.payoutsReady} × ₱500 payouts ready`
+            : `${peso(details.amountNeeded)} remaining`}
+        </span>
+        <span className={mutedText}>Target {peso(threshold)}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label="Payout balance progress"
+        aria-valuemin={0}
+        aria-valuemax={threshold}
+        aria-valuenow={Math.min(
+          threshold,
+          Math.max(0, Math.round(details.balance * 100) / 100),
+        )}
+        className={`mt-2 h-2 overflow-hidden rounded-full ${
+          dark ? "bg-white/15" : "bg-[#E6F2DD]"
+        }`}
+      >
+        <span
+          className={`block h-full rounded-full ${
+            details.isReady ? "bg-[#E7C96B]" : "bg-[#527A70]"
+          }`}
+          style={{ width: `${details.progress}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
-export function OverallProfitInsights({ analytics, onOpenPlayer }) {
-  if (!analytics.ranked.length) return null;
+export function PlayerBalanceOverview({ analytics, onOpenPlayer }) {
+  if (!analytics.rows.length) return null;
   return (
     <section className="mt-8">
       <div>
-        <p className="font-bold uppercase text-[#659287]">Player analytics</p>
-        <h2 className="mt-1 text-2xl font-bold">
-          Gain leaderboard &amp; daily ratio
-        </h2>
+        <p className="font-bold uppercase text-[#659287]">Payout tracker</p>
+        <h2 className="mt-1 text-2xl font-bold">Player remaining balances</h2>
         <p className="mt-2 text-sm text-[#527A70]">
-          Ranked by all-time net PHP. Daily ratio compares today with yesterday,
-          while today share shows each player&apos;s part of the combined gain.
+          Balance is each player&apos;s net profit minus saved payouts. A player
+          is ready again every time the balance reaches ₱500.
         </p>
       </div>
 
-      {analytics.highestGain ? (
-        <article className="mt-5 overflow-hidden rounded-2xl bg-[#29453E] text-white">
-          <div className="grid gap-4 p-5 sm:grid-cols-[auto_1fr_auto] sm:items-center">
-            <span className="grid size-12 place-items-center rounded-2xl bg-[#E7C96B] text-[#29453E]">
-              <Crown size={24} />
+      <article className="mt-5 overflow-hidden rounded-2xl bg-[#29453E] text-white">
+        <div className="grid gap-5 p-5 sm:grid-cols-3 sm:p-6">
+          <div className="flex items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-white/10">
+              <Banknote size={21} />
             </span>
             <div>
               <p className="text-xs font-bold uppercase text-[#B1D3B9]">
-                Highest all-time gain
+                Total remaining balance
               </p>
-              <h3 className="mt-1 text-2xl font-bold">
-                {analytics.highestGain.player.name}
-              </h3>
-              <p className="mt-1 text-xs text-[#B1D3B9]">
-                First input:{" "}
-                {displayTimestamp(analytics.highestGain.firstInputAt)}
-              </p>
-            </div>
-            <div className="sm:text-right">
-              <p className="text-3xl font-bold">
-                {peso(analytics.highestGain.allTime.netPhp)}
-              </p>
-              <p className="mt-1 text-sm text-[#B1D3B9]">
-                {format(analytics.highestGain.allTime.netTro)} TRO ·{" "}
-                {format(analytics.highestGain.overallShare, 1)}% overall share
+              <p className="mt-1 text-2xl font-bold">
+                {peso(analytics.totalBalancePhp)}
               </p>
             </div>
           </div>
-        </article>
-      ) : null}
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <article className="overflow-hidden rounded-2xl border border-[#B1D3B9] bg-white">
-          <header className="flex items-center gap-3 border-b border-[#E6F2DD] p-5">
-            <Trophy size={20} className="text-[#527A70]" />
+          <div className="flex items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#E7C96B] text-[#29453E]">
+              <CheckCircle2 size={21} />
+            </span>
             <div>
-              <h3 className="font-bold">All-player leaderboard</h3>
-              <p className="text-xs text-[#659287]">Net gain after shovels</p>
+              <p className="text-xs font-bold uppercase text-[#B1D3B9]">
+                Players ready
+              </p>
+              <p className="mt-1 text-2xl font-bold">
+                {analytics.readyCount} / {analytics.rows.length}
+              </p>
             </div>
-          </header>
-          <div className="divide-y divide-[#E6F2DD]">
-            {analytics.ranked.map((row, index) => (
-              <button
-                type="button"
-                key={row.player.id}
-                onClick={() => onOpenPlayer(row.player.id)}
-                className="grid w-full grid-cols-[2rem_1fr_auto] items-center gap-3 p-4 text-left hover:bg-[#F8FBF5]"
-              >
-                <span
-                  className={`grid size-8 place-items-center rounded-full text-sm font-bold ${
-                    index === 0
-                      ? "bg-[#E7C96B] text-[#29453E]"
-                      : "bg-[#E6F2DD] text-[#527A70]"
-                  }`}
-                >
-                  {index + 1}
-                </span>
-                <span className="min-w-0">
-                  <strong className="block truncate">{row.player.name}</strong>
-                  <small className="block truncate text-[#659287]">
-                    First input: {displayTimestamp(row.firstInputAt)}
-                  </small>
-                </span>
-                <span className="text-right">
-                  <strong className="block">{peso(row.allTime.netPhp)}</strong>
-                  <small className="text-[#659287]">
-                    {format(row.allTime.netTro)} TRO
-                  </small>
-                </span>
-              </button>
-            ))}
           </div>
-        </article>
+          <div className="flex items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-white/10">
+              <WalletCards size={21} />
+            </span>
+            <div>
+              <p className="text-xs font-bold uppercase text-[#B1D3B9]">
+                ₱500 payout batches
+              </p>
+              <p className="mt-1 text-2xl font-bold">
+                {analytics.readyPayoutCount}
+              </p>
+            </div>
+          </div>
+        </div>
+      </article>
 
-        <article className="overflow-hidden rounded-2xl border border-[#B1D3B9] bg-white">
-          <header className="flex items-center justify-between gap-3 border-b border-[#E6F2DD] p-5">
-            <div className="flex items-center gap-3">
-              <CalendarDays size={20} className="text-[#527A70]" />
-              <div>
-                <h3 className="font-bold">Daily gain ratio</h3>
-                <p className="text-xs text-[#659287]">
-                  {displayDate(analytics.today)} vs{" "}
-                  {displayDate(analytics.yesterday)}
-                </p>
-              </div>
-            </div>
-            <strong>{peso(analytics.combinedTodayPhp)}</strong>
-          </header>
-          <div className="divide-y divide-[#E6F2DD]">
-            {analytics.daily.map((row) => (
-              <button
-                type="button"
-                key={row.player.id}
-                onClick={() => onOpenPlayer(row.player.id)}
-                className="grid w-full gap-3 p-4 text-left hover:bg-[#F8FBF5] sm:grid-cols-[1fr_auto_auto] sm:items-center"
-              >
-                <span>
-                  <strong className="block">{row.player.name}</strong>
-                  <small className="text-[#659287]">
-                    {format(row.todayShare, 1)}% of today&apos;s combined gain
-                  </small>
-                </span>
-                <span className="sm:text-right">
-                  <strong className="block">{peso(row.today.netPhp)}</strong>
-                  <small className="text-[#659287]">today</small>
-                </span>
-                <RatioBadge value={row.changeRatio} current={row.changePhp} />
-              </button>
-            ))}
+      <article className="mt-4 overflow-hidden rounded-2xl border border-[#B1D3B9] bg-white">
+        <header className="flex items-center gap-3 border-b border-[#E6F2DD] p-5">
+          <WalletCards size={20} className="text-[#527A70]" />
+          <div>
+            <h3 className="font-bold">All player balances</h3>
+            <p className="text-xs text-[#659287]">
+              Ready players appear first. Open a player to record the payout.
+            </p>
           </div>
-        </article>
-      </div>
+        </header>
+        <div className="divide-y divide-[#E6F2DD]">
+          {analytics.rows.map((row) => (
+            <button
+              type="button"
+              key={row.player.id}
+              onClick={() => onOpenPlayer(row.player.id)}
+              className={`grid w-full gap-4 p-4 text-left hover:bg-[#F8FBF5] sm:grid-cols-[auto_1fr_minmax(13rem,18rem)] sm:items-center ${
+                row.isReady ? "bg-[#FFFBEA]" : ""
+              }`}
+            >
+              <span
+                className={`grid size-10 place-items-center rounded-xl ${
+                  row.isReady
+                    ? "bg-[#E7C96B] text-[#29453E]"
+                    : "bg-[#E6F2DD] text-[#527A70]"
+                }`}
+              >
+                {row.isReady ? (
+                  <CheckCircle2 size={20} />
+                ) : (
+                  <Clock3 size={20} />
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="flex flex-wrap items-center gap-2">
+                  <strong className="truncate">{row.player.name}</strong>
+                  {row.isReady ? (
+                    <small className="rounded-full bg-[#E7C96B] px-2 py-1 font-bold text-[#29453E]">
+                      Ready for payout
+                    </small>
+                  ) : null}
+                </span>
+                <small className="mt-1 block truncate text-[#659287]">
+                  First input: {displayTimestamp(row.firstInputAt)}
+                </small>
+                <strong className="mt-2 block text-xl">
+                  {peso(row.balancePhp)}
+                </strong>
+                <small className="text-[#659287]">
+                  Remaining after {peso(row.totalCashoutPhp)} paid
+                </small>
+              </span>
+              <BalanceProgress
+                balancePhp={row.balancePhp}
+                threshold={analytics.payoutThreshold}
+              />
+            </button>
+          ))}
+        </div>
+      </article>
     </section>
   );
 }
@@ -204,7 +225,7 @@ function SummaryCard({ label, summary }) {
 }
 
 export function SharedProfitSummary({ snapshot }) {
-  const today = snapshot.summaries.today;
+  const payout = payoutDetails(snapshot.balance.php);
   return (
     <main className="min-h-screen bg-[#E6F2DD] px-4 py-7 text-[#29453E]">
       <div className="mx-auto max-w-5xl">
@@ -249,7 +270,7 @@ export function SharedProfitSummary({ snapshot }) {
             </div>
             <div>
               <p className="text-xs font-bold uppercase text-[#B1D3B9]">
-                Total cashout
+                Total payout
               </p>
               <p className="mt-2 text-3xl font-bold text-[#FFD6D6]">
                 −{peso(snapshot.cashout.php)}
@@ -268,8 +289,19 @@ export function SharedProfitSummary({ snapshot }) {
               <p className="mt-1 text-sm text-[#B1D3B9]">
                 {format(snapshot.balance.tro)} TRO
               </p>
+              <div className="mt-4">
+                <BalanceProgress balancePhp={snapshot.balance.php} dark />
+              </div>
             </div>
           </div>
+          {payout.isReady ? (
+            <p className="mt-5 inline-flex items-center gap-2 rounded-full bg-[#E7C96B] px-3 py-1.5 text-sm font-bold text-[#29453E]">
+              <CheckCircle2 size={16} />
+              {payout.payoutsReady === 1
+                ? "Ready for ₱500 payout"
+                : `${payout.payoutsReady} × ₱500 payouts ready`}
+            </p>
+          ) : null}
         </header>
 
         <section className="mt-5 grid gap-3 sm:grid-cols-3">
@@ -279,23 +311,17 @@ export function SharedProfitSummary({ snapshot }) {
         </section>
 
         <section className="mt-5 overflow-hidden rounded-2xl border border-[#B1D3B9] bg-white">
-          <header className="flex flex-col justify-between gap-3 border-b border-[#E6F2DD] p-5 sm:flex-row sm:items-center">
-            <div>
-              <h2 className="text-xl font-bold">7-day gain history</h2>
-              <p className="mt-1 text-sm text-[#659287]">
-                Net gain after shovel deductions
-              </p>
-            </div>
-            <RatioBadge
-              value={snapshot.dailyChangeRatio}
-              current={today.netPhp - snapshot.summaries.yesterday.netPhp}
-            />
+          <header className="border-b border-[#E6F2DD] p-5">
+            <h2 className="text-xl font-bold">7-day gain history</h2>
+            <p className="mt-1 text-sm text-[#659287]">
+              Daily net gain after shovel deductions
+            </p>
           </header>
           <div className="divide-y divide-[#E6F2DD]">
             {snapshot.dailyHistory.map((day) => (
               <div
                 key={day.date}
-                className="grid grid-cols-[1fr_auto_auto] items-center gap-3 px-5 py-4"
+                className="grid grid-cols-[1fr_auto] items-center gap-3 px-5 py-4"
               >
                 <span className="text-sm font-bold">
                   {displayDate(day.date)}
@@ -306,10 +332,6 @@ export function SharedProfitSummary({ snapshot }) {
                     {format(day.summary.netTro)} TRO
                   </small>
                 </span>
-                <RatioBadge
-                  value={day.changeRatio}
-                  current={day.summary.netPhp}
-                />
               </div>
             ))}
           </div>
@@ -317,7 +339,8 @@ export function SharedProfitSummary({ snapshot }) {
 
         <footer className="mt-5 rounded-2xl bg-white/70 p-4 text-center text-xs text-[#659287]">
           Read-only snapshot generated {displayTimestamp(snapshot.generatedAt)}.
-          This link contains summary totals only and does not update automatically.
+          This link contains summary totals only and does not update
+          automatically.
         </footer>
       </div>
     </main>

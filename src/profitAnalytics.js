@@ -17,6 +17,8 @@ const SUMMARY_KEYS = [
   "netPhp",
 ];
 
+export const PAYOUT_THRESHOLD_PHP = 500;
+
 function transactionsForPlayer(state, playerId) {
   return state.transactions.filter((entry) => entry.playerId === playerId);
 }
@@ -25,6 +27,10 @@ function compactSummary(summary) {
   return Object.fromEntries(
     SUMMARY_KEYS.map((key) => [key, Number(summary?.[key]) || 0]),
   );
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
 }
 
 function dateDaysAgo(now, daysAgo) {
@@ -47,7 +53,7 @@ export function playerFirstInputAt(transactions, playerId) {
   return earliest?.value || null;
 }
 
-export function gainChangeRatio(current, previous) {
+function gainChangeRatio(current, previous) {
   const currentValue = Number(current) || 0;
   const previousValue = Number(previous) || 0;
   if (Math.abs(previousValue) < 0.005) {
@@ -56,10 +62,18 @@ export function gainChangeRatio(current, previous) {
   return ((currentValue - previousValue) / Math.abs(previousValue)) * 100;
 }
 
-export function buildOverallGainAnalytics(state, now = new Date()) {
-  const today = localDate(now);
-  const yesterday = dateDaysAgo(now, 1);
+export function buildPlayerBalanceAnalytics(
+  state,
+  payoutThreshold = PAYOUT_THRESHOLD_PHP,
+) {
+  const safeThreshold =
+    Number.isFinite(Number(payoutThreshold)) && Number(payoutThreshold) > 0
+      ? Number(payoutThreshold)
+      : PAYOUT_THRESHOLD_PHP;
   const transactionsByPlayer = new Map(
+    state.players.map((player) => [player.id, []]),
+  );
+  const cashoutsByPlayer = new Map(
     state.players.map((player) => [player.id, []]),
   );
   const firstInputByPlayer = new Map();
@@ -77,71 +91,67 @@ export function buildOverallGainAnalytics(state, now = new Date()) {
       });
     }
   });
+  (state.cashouts || []).forEach((cashout) => {
+    cashoutsByPlayer.get(cashout.playerId)?.push(cashout);
+  });
   const rows = state.players.map((player) => {
     const transactions = transactionsByPlayer.get(player.id) || [];
+    const cashouts = cashoutsByPlayer.get(player.id) || [];
     const settings = player.settings || state.settings;
     const allTime = summarize(transactions, settings);
-    const todaySummary = summarize(
-      transactions.filter((entry) => entry.date === today),
-      settings,
+    const totalCashoutPhp = roundMoney(
+      cashouts.reduce(
+        (sum, cashout) => sum + (Number(cashout.amount) || 0),
+        0,
+      ),
     );
-    const yesterdaySummary = summarize(
-      transactions.filter((entry) => entry.date === yesterday),
-      settings,
-    );
+    const totalCashoutTro = cashouts.reduce((sum, cashout) => {
+      const ratios = cashoutRatios(cashout, settings);
+      return (
+        sum +
+        ((Number(cashout.amount) || 0) / ratios.phpAmount) * ratios.phpTro
+      );
+    }, 0);
+    const balancePhp = roundMoney(allTime.netPhp - totalCashoutPhp);
+    const balanceTro = allTime.netTro - totalCashoutTro;
+    const payoutsReady = Math.max(0, Math.floor(balancePhp / safeThreshold));
     return {
       player,
       allTime,
-      today: todaySummary,
-      yesterday: yesterdaySummary,
-      firstInputAt: firstInputByPlayer.get(player.id)?.value || null,
-      changePhp: todaySummary.netPhp - yesterdaySummary.netPhp,
-      changeRatio: gainChangeRatio(
-        todaySummary.netPhp,
-        yesterdaySummary.netPhp,
+      totalCashoutPhp,
+      totalCashoutTro,
+      balancePhp,
+      balanceTro,
+      payoutsReady,
+      isReady: payoutsReady > 0,
+      amountNeededPhp: roundMoney(
+        Math.max(0, safeThreshold - balancePhp),
       ),
+      progressPercent: Math.min(
+        100,
+        Math.max(0, (balancePhp / safeThreshold) * 100),
+      ),
+      firstInputAt: firstInputByPlayer.get(player.id)?.value || null,
     };
   });
-  const combinedTodayPhp = rows.reduce(
-    (sum, row) => sum + row.today.netPhp,
-    0,
-  );
-  const combinedAllTimePhp = rows.reduce(
-    (sum, row) => sum + row.allTime.netPhp,
-    0,
-  );
-  const withShares = rows.map((row) => ({
-    ...row,
-    todayShare:
-      Math.abs(combinedTodayPhp) < 0.005
-        ? 0
-        : (row.today.netPhp / combinedTodayPhp) * 100,
-    overallShare:
-      Math.abs(combinedAllTimePhp) < 0.005
-        ? 0
-        : (row.allTime.netPhp / combinedAllTimePhp) * 100,
-  }));
-  const ranked = withShares.toSorted(
+  const sortedRows = rows.toSorted(
     (a, b) =>
-      Number(Boolean(b.firstInputAt)) - Number(Boolean(a.firstInputAt)) ||
-      b.allTime.netPhp - a.allTime.netPhp ||
-      b.allTime.netTro - a.allTime.netTro ||
-      a.player.name.localeCompare(b.player.name),
-  );
-  const daily = withShares.toSorted(
-    (a, b) =>
-      b.today.netPhp - a.today.netPhp ||
-      b.allTime.netPhp - a.allTime.netPhp ||
+      Number(b.isReady) - Number(a.isReady) ||
+      b.payoutsReady - a.payoutsReady ||
+      b.balancePhp - a.balancePhp ||
       a.player.name.localeCompare(b.player.name),
   );
   return {
-    today,
-    yesterday,
-    ranked,
-    daily,
-    highestGain: ranked[0]?.firstInputAt ? ranked[0] : null,
-    combinedTodayPhp,
-    combinedAllTimePhp,
+    payoutThreshold: safeThreshold,
+    rows: sortedRows,
+    readyCount: rows.filter((row) => row.isReady).length,
+    readyPayoutCount: rows.reduce(
+      (sum, row) => sum + row.payoutsReady,
+      0,
+    ),
+    totalBalancePhp: roundMoney(
+      rows.reduce((sum, row) => sum + row.balancePhp, 0),
+    ),
   };
 }
 
@@ -205,7 +215,7 @@ export function buildPlayerProfitSnapshot(player, state, now = new Date()) {
       tro: totalCashoutTro,
     },
     balance: {
-      php: allTime.netPhp - totalCashoutPhp,
+      php: roundMoney(allTime.netPhp - totalCashoutPhp),
       tro: allTime.netTro - totalCashoutTro,
     },
     dailyChangeRatio: gainChangeRatio(
