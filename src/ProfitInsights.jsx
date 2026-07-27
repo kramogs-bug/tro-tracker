@@ -228,7 +228,7 @@ export function SharedProfitSummary({ snapshot }) {
                 <Printer size={16} /> Print
               </button>
               <a
-                href={window.location.pathname}
+                href="/"
                 className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-[#29453E]"
               >
                 <ExternalLink size={16} /> Open tracker
