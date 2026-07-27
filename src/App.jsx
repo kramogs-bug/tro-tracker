@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDownRight,
-  ArrowUpRight,
   Banknote,
   BarChart3,
   CalendarClock,
@@ -31,16 +29,16 @@ import AccountModal from "./AccountModal.jsx";
 import GmailAccountsTab from "./GmailAccountsTab.jsx";
 import TradeScreenshotScanner from "./TradeScreenshotScanner.jsx";
 import {
-  OverallProfitInsights,
+  PlayerBalanceOverview,
   SharedProfitSummary,
 } from "./ProfitInsights.jsx";
 import { SHELL_ITEMS } from "./sellablesData.js";
 import {
-  buildOverallGainAnalytics,
+  buildPlayerBalanceAnalytics,
   buildPlayerProfitSnapshot,
   createProfitShareLink,
-  gainChangeRatio,
   loadProfitShareSnapshot,
+  PAYOUT_THRESHOLD_PHP,
   playerFirstInputAt,
   readProfitShareId,
   readProfitSnapshot,
@@ -656,7 +654,7 @@ function PlayerHeader({
           onClick={() => onTabChange("profit")}
           className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "profit" ? "bg-[#527A70] text-white" : "text-[#527A70] hover:bg-[#F2F8ED]"}`}
         >
-          <BarChart3 size={17} /> Profit &amp; Cashout
+          <BarChart3 size={17} /> Profit &amp; Payout
         </button>
       </div>
     </>
@@ -688,7 +686,7 @@ function ProfitDayCard({ title, date, summary, cashout }) {
           <p className="mt-1 font-bold">{formatPeso(grossPhp)}</p>
         </div>
         <div>
-          <p className="text-xs text-[#659287]">Cashout that day</p>
+          <p className="text-xs text-[#659287]">Payout that day</p>
           <p className="mt-1 font-bold">{formatPeso(cashout)}</p>
         </div>
       </div>
@@ -703,6 +701,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   const [feedback, setFeedback] = useState("");
   const [shareFeedback, setShareFeedback] = useState("");
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const payoutFormRef = useRef(null);
   const now = new Date();
   const today = localDate(now);
   const previousDay = new Date(now);
@@ -746,18 +745,34 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
     const ratios = cashoutRatios(cashout, settings);
     return sum + (cashout.amount / ratios.phpAmount) * ratios.phpTro;
   }, 0);
-  const remainingPhp = totalProfitPhp - totalCashout;
+  const remainingPhp =
+    Math.round((totalProfitPhp - totalCashout) * 100) / 100;
   const remainingTro = allTimeProfit.netTro - cashoutTro;
-  const differenceTro = todayProfit.netTro - yesterdayProfit.netTro;
-  const differencePhp = todayProfit.netPhp - yesterdayProfit.netPhp;
-  const dailyGainRatio = gainChangeRatio(
-    todayProfit.netPhp,
-    yesterdayProfit.netPhp,
+  const payoutsReady = Math.max(
+    0,
+    Math.floor(remainingPhp / PAYOUT_THRESHOLD_PHP),
   );
-  const improved = differencePhp >= 0;
+  const isReadyForPayout = payoutsReady > 0;
+  const amountNeededForPayout =
+    Math.round(
+      Math.max(0, PAYOUT_THRESHOLD_PHP - remainingPhp) * 100,
+    ) / 100;
+  const payoutProgress = Math.min(
+    100,
+    Math.max(0, (remainingPhp / PAYOUT_THRESHOLD_PHP) * 100),
+  );
 
   const currentProfitShareLink = () =>
     createProfitShareLink(buildPlayerProfitSnapshot(player, state));
+
+  const preparePayout = () => {
+    setAmount(String(PAYOUT_THRESHOLD_PHP));
+    setFeedback("₱500 payout prepared. Confirm the date, then save.");
+    payoutFormRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
 
   const copyProfitSummaryLink = async () => {
     setIsCreatingShareLink(true);
@@ -812,7 +827,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
     event.preventDefault();
     const parsedAmount = Math.round(Number(amount) * 100) / 100;
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setFeedback("Maglagay ng valid cashout amount.");
+      setFeedback("Maglagay ng valid payout amount.");
       return;
     }
     setState((current) => ({
@@ -832,7 +847,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
     }));
     setAmount("");
     setNote("");
-    setFeedback(`Cashout saved for ${displayDate(cashoutDate)}.`);
+    setFeedback(`Payout saved for ${displayDate(cashoutDate)}.`);
   };
 
   return (
@@ -885,39 +900,68 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
           cashout={yesterdayCashout}
         />
         <article
-          className={`rounded-2xl p-5 text-white ${improved ? "bg-[#527A70]" : "bg-[#9A4A4A]"}`}
+          className={`rounded-2xl p-5 ${
+            isReadyForPayout
+              ? "bg-[#29453E] text-white"
+              : "border border-[#B1D3B9] bg-white"
+          }`}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="font-bold">Daily difference</p>
-              <p className="mt-1 text-xs text-white/75">
-                Today compared with yesterday
+              <p className="font-bold">Payout status</p>
+              <p
+                className={`mt-1 text-xs ${
+                  isReadyForPayout ? "text-white/75" : "text-[#659287]"
+                }`}
+              >
+                Payout every {formatPeso(PAYOUT_THRESHOLD_PHP)}
               </p>
             </div>
-            {improved ? (
-              <ArrowUpRight size={25} />
-            ) : (
-              <ArrowDownRight size={25} />
-            )}
+            <WalletCards size={25} />
           </div>
-          <p className="mt-7 text-4xl font-bold">
-            {differenceTro > 0 ? "+" : ""}
-            {format(differenceTro)} TRO
+          <p className="mt-7 text-3xl font-bold">
+            {formatPeso(remainingPhp)}
           </p>
-          <p className="mt-2 text-2xl font-bold">
-            {formatPeso(differencePhp, true)}
+          <p
+            className={`mt-2 text-sm font-bold ${
+              isReadyForPayout ? "text-[#E7C96B]" : "text-[#527A70]"
+            }`}
+          >
+            {isReadyForPayout
+              ? payoutsReady === 1
+                ? "Ready for ₱500 payout"
+                : `${payoutsReady} × ₱500 payouts ready`
+              : `${formatPeso(amountNeededForPayout)} remaining`}
           </p>
-          <p className="mt-3 inline-flex rounded-full bg-white/15 px-3 py-1.5 text-sm font-bold">
-            Daily gain ratio:{" "}
-            {dailyGainRatio === null
-              ? todayProfit.netPhp >= 0
-                ? "New gain"
-                : "New loss"
-              : `${dailyGainRatio > 0 ? "+" : ""}${format(dailyGainRatio, 1)}%`}
-          </p>
-          <p className="mt-5 text-sm text-white/80">
-            Based on net profit after shovel deductions.
-          </p>
+          <div
+            role="progressbar"
+            aria-label={`${player.name} payout balance progress`}
+            aria-valuemin={0}
+            aria-valuemax={PAYOUT_THRESHOLD_PHP}
+            aria-valuenow={Math.min(
+              PAYOUT_THRESHOLD_PHP,
+              Math.max(0, Math.round(remainingPhp * 100) / 100),
+            )}
+            className={`mt-4 h-2.5 overflow-hidden rounded-full ${
+              isReadyForPayout ? "bg-white/15" : "bg-[#E6F2DD]"
+            }`}
+          >
+            <span
+              className={`block h-full rounded-full ${
+                isReadyForPayout ? "bg-[#E7C96B]" : "bg-[#527A70]"
+              }`}
+              style={{ width: `${payoutProgress}%` }}
+            />
+          </div>
+          {isReadyForPayout ? (
+            <button
+              type="button"
+              onClick={preparePayout}
+              className="mt-5 w-full rounded-xl bg-[#E7C96B] px-4 py-2.5 text-sm font-bold text-[#29453E] hover:bg-white"
+            >
+              Prepare ₱500 payout
+            </button>
+          ) : null}
         </article>
       </section>
 
@@ -936,7 +980,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
           </div>
           <div>
             <p className="text-xs font-bold uppercase text-[#B1D3B9]">
-              Total cashout
+              Total payouts
             </p>
             <p className="mt-2 text-3xl font-bold text-[#FFD6D6]">
               −{formatPeso(totalCashout)}
@@ -955,7 +999,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
               {formatPeso(remainingPhp)}
             </p>
             <p className="mt-1 text-sm text-[#B1D3B9]">
-              {format(remainingTro)} TRO after cashouts
+              {format(remainingTro)} TRO after payouts
             </p>
           </div>
         </div>
@@ -963,18 +1007,19 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
 
       <section className="mt-6 grid gap-6 lg:grid-cols-[360px_1fr]">
         <form
+          ref={payoutFormRef}
           onSubmit={addCashout}
           className="h-fit rounded-2xl border border-[#B1D3B9] bg-white p-5"
         >
           <span className="grid size-11 place-items-center rounded-xl bg-[#E6F2DD] text-[#527A70]">
             <WalletCards size={20} />
           </span>
-          <h2 className="mt-4 text-xl font-bold">Add cashout</h2>
+          <h2 className="mt-4 text-xl font-bold">Record payout</h2>
           <p className="mt-1 text-sm text-[#659287]">
             Enter the actual PHP amount already paid to this player.
           </p>
           <label className="mt-5 block text-sm font-bold">
-            Cashout amount (PHP)
+            Payout amount (PHP)
             <input
               required
               type="number"
@@ -988,7 +1033,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
             />
           </label>
           <label className="mt-4 block text-sm font-bold">
-            Cashout date
+            Payout date
             <input
               required
               type="date"
@@ -1012,7 +1057,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
             />
           </label>
           <button className={`mt-5 w-full ${primary}`}>
-            <Plus size={17} /> Save cashout
+            <Plus size={17} /> Save payout
           </button>
           {feedback ? (
             <p className="mt-3 text-center text-sm font-bold text-[#527A70]">
@@ -1024,7 +1069,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
         <div>
           <div className="flex items-end justify-between gap-3">
             <div>
-              <h2 className="text-xl font-bold">Cashout history</h2>
+              <h2 className="text-xl font-bold">Payout history</h2>
               <p className="mt-1 text-sm text-[#659287]">
                 All payouts for {player.name}.
               </p>
@@ -1050,7 +1095,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
                   <button
                     type="button"
                     onClick={() =>
-                      confirm("Delete this cashout entry?") &&
+                      confirm("Delete this payout entry?") &&
                       setState((current) => ({
                         ...current,
                         cashouts: (current.cashouts || []).filter(
@@ -1059,7 +1104,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
                       }))
                     }
                     className="rounded-lg bg-red-50 p-2 text-red-700"
-                    aria-label="Delete cashout"
+                    aria-label="Delete payout"
                   >
                     <Trash2 size={15} />
                   </button>
@@ -1068,7 +1113,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
             ))}
             {!playerCashouts.length ? (
               <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-[#659287]">
-                No cashouts recorded yet.
+                No payouts recorded yet.
               </p>
             ) : null}
           </div>
@@ -1576,13 +1621,13 @@ function TrackerApp() {
   const importRef = useRef(null);
   const cloud = useCloudTracker(state, setState);
   useEffect(() => saveState(state), [state]);
-  const gainAnalytics = useMemo(
-    () => buildOverallGainAnalytics(state),
+  const balanceAnalytics = useMemo(
+    () => buildPlayerBalanceAnalytics(state),
     [state],
   );
   const total = useMemo(
     () =>
-      gainAnalytics.ranked.reduce(
+      balanceAnalytics.rows.reduce(
         (sum, row) => ({
           gralats: sum.gralats + row.allTime.gralats,
           grossTro: sum.grossTro + row.allTime.grossTro,
@@ -1602,14 +1647,14 @@ function TrackerApp() {
           shovelPhp: 0,
         },
       ),
-    [gainAnalytics],
+    [balanceAnalytics],
   );
-  const gainAnalyticsByPlayer = useMemo(
+  const balanceByPlayer = useMemo(
     () =>
       new Map(
-        gainAnalytics.ranked.map((row) => [row.player.id, row]),
+        balanceAnalytics.rows.map((row) => [row.player.id, row]),
       ),
-    [gainAnalytics],
+    [balanceAnalytics],
   );
   const selected = state.players.find((player) => player.id === selectedId);
   const gmailCountsByPlayer = useMemo(() => {
@@ -1809,14 +1854,13 @@ function TrackerApp() {
                 icon={<Banknote size={19} />}
               />
             </div>
-            <OverallProfitInsights
-              analytics={gainAnalytics}
+            <PlayerBalanceOverview
+              analytics={balanceAnalytics}
               onOpenPlayer={setSelectedId}
             />
             <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {state.players.map((player) => {
-                const playerAnalytics = gainAnalyticsByPlayer.get(player.id);
-                const playerTotal = playerAnalytics?.allTime;
+                const playerBalance = balanceByPlayer.get(player.id);
                 const linkedGmailCount = gmailCountsByPlayer.get(player.id) || 0;
                 return (
                   <article
@@ -1833,17 +1877,15 @@ function TrackerApp() {
                         </span>
                         <span className="text-right">
                           <strong className="block text-xl">
-                            {format(playerTotal.netTro)} TRO
+                            {formatPeso(playerBalance.balancePhp)}
                           </strong>
-                          <small>
-                            ₱{format(playerTotal.netPhp)}
-                          </small>
+                          <small>remaining balance</small>
                         </span>
                       </div>
                       <h2 className="mt-4 font-bold">{player.name}</h2>
                       <p className="mt-1 text-xs text-[#659287]">
-                        {playerAnalytics?.firstInputAt
-                          ? `First input ${displayTimestamp(playerAnalytics.firstInputAt)}`
+                        {playerBalance?.firstInputAt
+                          ? `First input ${displayTimestamp(playerBalance.firstInputAt)}`
                           : "No saved input yet"}
                       </p>
                       <p className="mt-1 text-xs text-[#659287]">
@@ -1852,6 +1894,19 @@ function TrackerApp() {
                       <p className="mt-2 flex items-center gap-1.5 text-xs font-bold text-[#527A70]">
                         <Mail size={13} /> {linkedGmailCount} Gmail account
                         {linkedGmailCount === 1 ? "" : "s"} linked
+                      </p>
+                      <p
+                        className={`mt-3 rounded-xl px-3 py-2 text-center text-xs font-bold ${
+                          playerBalance.isReady
+                            ? "bg-[#E7C96B] text-[#29453E]"
+                            : "bg-[#F2F8ED] text-[#527A70]"
+                        }`}
+                      >
+                        {playerBalance.isReady
+                          ? playerBalance.payoutsReady === 1
+                            ? "Ready for ₱500 payout"
+                            : `${playerBalance.payoutsReady} × ₱500 payouts ready`
+                          : `${formatPeso(playerBalance.amountNeededPhp)} to payout`}
                       </p>
                       <p className="mt-4 rounded-xl bg-[#E6F2DD] py-2 text-center text-sm font-bold">
                         Open calculator
