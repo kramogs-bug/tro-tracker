@@ -1,5 +1,7 @@
 const STORAGE_KEY = "troTrackerData:v1";
 const GMAIL_PATTERN = /^[^\s@]+@gmail\.com$/i;
+const PROFIT_SHARE_ID_PATTERN = /^[A-Za-z0-9_-]{10,16}$/;
+const PROFIT_SHARE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 export const GMAIL_STATUSES = ["available", "ready", "in_use", "jailed"];
 const GMAIL_STATUS_SET = new Set(GMAIL_STATUSES);
 export const DEFAULT_SETTINGS = {
@@ -143,6 +145,20 @@ export function saveState(state) {
   }
 }
 
+function normalizeProfitShare(value) {
+  const id = String(value?.id || "");
+  const editorToken = String(value?.editorToken || "");
+  const expiresAt = String(value?.expiresAt || "");
+  if (
+    !PROFIT_SHARE_ID_PATTERN.test(id) ||
+    !PROFIT_SHARE_TOKEN_PATTERN.test(editorToken) ||
+    !Number.isFinite(new Date(expiresAt).getTime())
+  ) {
+    return null;
+  }
+  return { id, editorToken, expiresAt };
+}
+
 export function normalizeState(value) {
   if (!value || typeof value !== "object") return emptyState;
   const fallbackSettings = normalizeSettings(value.settings);
@@ -169,6 +185,7 @@ export function normalizeState(value) {
             createdAt: p.createdAt || new Date().toISOString(),
             settings,
             ratioHistory,
+            profitShare: normalizeProfitShare(p.profitShare),
           };
         })
     : [];

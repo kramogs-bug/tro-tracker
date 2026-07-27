@@ -224,7 +224,7 @@ function SummaryCard({ label, summary }) {
   );
 }
 
-export function SharedProfitSummary({ snapshot }) {
+export function SharedProfitSummary({ snapshot, share = null }) {
   const payout = payoutDetails(snapshot.balance.php);
   return (
     <main className="min-h-screen bg-[#E6F2DD] px-4 py-7 text-[#29453E]">
@@ -235,6 +235,15 @@ export function SharedProfitSummary({ snapshot }) {
               <p className="flex items-center gap-2 text-sm font-bold uppercase text-[#B1D3B9]">
                 <Pickaxe size={17} /> TRO Tracker · Shared profit summary
               </p>
+              {share?.live ? (
+                <p className="mt-3 inline-flex items-center gap-2 rounded-full bg-[#E7C96B] px-3 py-1.5 text-xs font-bold text-[#29453E]">
+                  <span className="relative flex size-2">
+                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-[#527A70] opacity-75" />
+                    <span className="relative inline-flex size-2 rounded-full bg-[#527A70]" />
+                  </span>
+                  Live summary · updates automatically
+                </p>
+              ) : null}
               <h1 className="mt-3 text-4xl font-bold">{snapshot.player.name}</h1>
               <p className="mt-2 text-sm text-[#B1D3B9]">
                 First input: {displayTimestamp(snapshot.player.firstInputAt)}
@@ -338,9 +347,20 @@ export function SharedProfitSummary({ snapshot }) {
         </section>
 
         <footer className="mt-5 rounded-2xl bg-white/70 p-4 text-center text-xs text-[#659287]">
-          Read-only snapshot generated {displayTimestamp(snapshot.generatedAt)}.
-          This link contains summary totals only and does not update
-          automatically.
+          {share?.live ? (
+            <>
+              Live read-only summary updated{" "}
+              {displayTimestamp(share.updatedAt || snapshot.generatedAt)}.
+              Link expires {displayTimestamp(share.expiresAt)}. New saved
+              changes appear automatically.
+            </>
+          ) : (
+            <>
+              Read-only snapshot generated{" "}
+              {displayTimestamp(snapshot.generatedAt)}. This link contains
+              summary totals only and does not update automatically.
+            </>
+          )}
         </footer>
       </div>
     </main>

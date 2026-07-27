@@ -37,7 +37,8 @@ import {
   buildPlayerBalanceAnalytics,
   buildPlayerProfitSnapshot,
   createProfitShareLink,
-  loadProfitShareSnapshot,
+  isProfitShareActive,
+  loadProfitShare,
   PAYOUT_THRESHOLD_PHP,
   playerFirstInputAt,
   readProfitShareId,
@@ -61,6 +62,7 @@ import {
   toPhp,
 } from "./tracker.js";
 import { useCloudTracker } from "./useCloudTracker.js";
+import { useLiveProfitShares } from "./useLiveProfitShares.js";
 
 const input =
   "w-full rounded-xl border border-[#B1D3B9] bg-white px-3 py-2.5 text-center font-bold outline-none focus:border-[#527A70]";
@@ -694,7 +696,13 @@ function ProfitDayCard({ title, date, summary, cashout }) {
   );
 }
 
-function ProfitCashoutTab({ player, state, setState, settings }) {
+function ProfitCashoutTab({
+  player,
+  state,
+  setState,
+  settings,
+  cloudAccountActive,
+}) {
   const [amount, setAmount] = useState("");
   const [cashoutDate, setCashoutDate] = useState(localDate);
   const [note, setNote] = useState("");
@@ -762,8 +770,38 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
     Math.max(0, (remainingPhp / PAYOUT_THRESHOLD_PHP) * 100),
   );
 
-  const currentProfitShareLink = () =>
-    createProfitShareLink(buildPlayerProfitSnapshot(player, state));
+  const hasActiveLiveLink = isProfitShareActive(player.profitShare);
+  const currentProfitShareLink = async () => {
+    const share = await createProfitShareLink(
+      buildPlayerProfitSnapshot(player, state),
+      player.id,
+      player.profitShare,
+    );
+    if (share.profitShare) {
+      setState((current) => {
+        const currentPlayer = current.players.find(
+          (entry) => entry.id === player.id,
+        );
+        const currentShare = currentPlayer?.profitShare;
+        if (
+          currentShare?.id === share.profitShare.id &&
+          currentShare?.editorToken === share.profitShare.editorToken &&
+          currentShare?.expiresAt === share.profitShare.expiresAt
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          players: current.players.map((entry) =>
+            entry.id === player.id
+              ? { ...entry, profitShare: share.profitShare }
+              : entry,
+          ),
+        };
+      });
+    }
+    return share;
+  };
 
   const preparePayout = () => {
     setAmount(String(PAYOUT_THRESHOLD_PHP));
@@ -781,9 +819,11 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
       const share = await currentProfitShareLink();
       await copyText(share.url);
       setShareFeedback(
-        share.short
-          ? "Short link copied. Pwede mo na itong i-paste."
-          : "Cloud unavailable. Fallback link copied.",
+        share.live
+          ? share.syncPending
+            ? "Live link copied. Pending changes will sync when online."
+            : "Live link copied. New saved changes will update automatically."
+          : "Cloud unavailable. Static fallback link copied.",
       );
     } catch {
       setShareFeedback("Hindi ma-copy ang link sa browser na ito.");
@@ -800,18 +840,20 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
       if (navigator.share) {
         await navigator.share({
           title: `${player.name} · TRO profit summary`,
-          text: `Read-only profit summary for ${player.name}`,
+          text: `Live read-only profit summary for ${player.name}`,
           url: share.url,
         });
         setShareFeedback(
-          share.short
-            ? "Short profit summary shared."
-            : "Profit summary shared using fallback link.",
+          share.live
+            ? share.syncPending
+              ? "Live summary shared. Pending changes sync when online."
+              : "Live profit summary shared."
+            : "Static fallback summary shared.",
         );
       } else {
         await copyText(share.url);
         setShareFeedback(
-          share.short ? "Short link copied." : "Fallback link copied.",
+          share.live ? "Live link copied." : "Static fallback link copied.",
         );
       }
     } catch (error) {
@@ -856,8 +898,26 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
         <div>
           <h2 className="font-bold">Share profit summary</h2>
           <p className="mt-1 text-xs text-[#659287]">
-            Creates a short read-only snapshot link with totals only—no raw
-            entries or account access. Short links expire after 30 days.
+            One secure read-only live link per player. New saved inputs,
+            edits, and payouts update the same link automatically. Totals only—
+            no raw entries or account access. Expires 30 days after creation.
+          </p>
+          {!cloudAccountActive && !hasActiveLiveLink ? (
+            <p className="mt-2 text-xs font-bold text-amber-700">
+              Sign in to a cloud account to create a live link. Without an
+              account, Copy or Share will use a static fallback link.
+            </p>
+          ) : null}
+          <p
+            className={`mt-2 text-xs font-bold ${
+              hasActiveLiveLink ? "text-[#527A70]" : "text-[#659287]"
+            }`}
+          >
+            {hasActiveLiveLink
+              ? `Live link active until ${displayTimestamp(player.profitShare.expiresAt)}.`
+              : player.profitShare
+                ? "Previous live link expired. Copy or share to create a new one."
+                : "Copy or share once to activate this player's live link."}
           </p>
           {shareFeedback ? (
             <p className="mt-2 text-xs font-bold text-[#527A70]">
@@ -1123,7 +1183,13 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
   );
 }
 
-function PlayerCalculator({ player, state: rawState, setState, onBack }) {
+function PlayerCalculator({
+  player,
+  state: rawState,
+  setState,
+  onBack,
+  cloudAccountActive,
+}) {
   const playerSettings = player.settings || rawState.settings;
   const state = { ...rawState, settings: playerSettings };
   const [quantities, setQuantities] = useState(emptyQuantities);
@@ -1271,6 +1337,7 @@ function PlayerCalculator({ player, state: rawState, setState, onBack }) {
           state={rawState}
           setState={setState}
           settings={playerSettings}
+          cloudAccountActive={cloudAccountActive}
         />
       </>
     );
@@ -1620,6 +1687,7 @@ function TrackerApp() {
   const [accountOpen, setAccountOpen] = useState(false);
   const importRef = useRef(null);
   const cloud = useCloudTracker(state, setState);
+  useLiveProfitShares(state);
   useEffect(() => saveState(state), [state]);
   const balanceAnalytics = useMemo(
     () => buildPlayerBalanceAnalytics(state),
@@ -1672,6 +1740,7 @@ function TrackerApp() {
       createdAt: new Date().toISOString(),
       settings: { ...state.settings },
       ratioHistory: { [localDate()]: { ...state.settings } },
+      profitShare: null,
     };
     setState((current) => ({
       ...current,
@@ -1797,6 +1866,7 @@ function TrackerApp() {
             player={selected}
             state={state}
             setState={setState}
+            cloudAccountActive={Boolean(cloud.session)}
             onBack={() => setSelectedId(null)}
           />
         ) : mainTab === "gmail" ? (
@@ -2014,7 +2084,7 @@ function TrackerApp() {
 function SharedProfitRoute() {
   const embeddedSnapshot = useMemo(() => readProfitSnapshot(), []);
   const shareId = useMemo(() => readProfitShareId(), []);
-  const [remoteSnapshot, setRemoteSnapshot] = useState(null);
+  const [remoteShare, setRemoteShare] = useState(null);
   const [shareStatus, setShareStatus] = useState(
     shareId ? "loading" : "none",
   );
@@ -2022,11 +2092,11 @@ function SharedProfitRoute() {
   useEffect(() => {
     if (!shareId || embeddedSnapshot) return undefined;
     let active = true;
-    void loadProfitShareSnapshot(shareId)
-      .then((snapshot) => {
+    void loadProfitShare(shareId)
+      .then((share) => {
         if (!active) return;
-        setRemoteSnapshot(snapshot);
-        setShareStatus(snapshot ? "ready" : "missing");
+        setRemoteShare(share);
+        setShareStatus(share ? "ready" : "missing");
       })
       .catch(() => {
         if (active) setShareStatus("missing");
@@ -2036,8 +2106,62 @@ function SharedProfitRoute() {
     };
   }, [embeddedSnapshot, shareId]);
 
-  const snapshot = embeddedSnapshot || remoteSnapshot;
-  if (snapshot) return <SharedProfitSummary snapshot={snapshot} />;
+  useEffect(() => {
+    if (!shareId || embeddedSnapshot || !remoteShare?.live) {
+      return undefined;
+    }
+    let active = true;
+    let refreshInFlight = false;
+    const applyShare = (share) => {
+      if (!active) return;
+      setRemoteShare(share);
+      setShareStatus("ready");
+    };
+    const refresh = () => {
+      if (
+        document.visibilityState !== "visible" ||
+        !navigator.onLine ||
+        refreshInFlight
+      ) {
+        return;
+      }
+      refreshInFlight = true;
+      void loadProfitShare(shareId)
+        .then((share) => {
+          if (share) {
+            applyShare(share);
+          } else if (active) {
+            setRemoteShare(null);
+            setShareStatus("missing");
+          }
+        })
+        .catch(() => {
+          // Keep the last successful summary visible during a temporary error.
+        })
+        .finally(() => {
+          refreshInFlight = false;
+        });
+    };
+    const refreshTimer = window.setInterval(refresh, 15000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+    };
+  }, [embeddedSnapshot, remoteShare?.live, shareId]);
+
+  const snapshot = embeddedSnapshot || remoteShare?.snapshot;
+  if (snapshot) {
+    return (
+      <SharedProfitSummary
+        snapshot={snapshot}
+        share={embeddedSnapshot ? null : remoteShare}
+      />
+    );
+  }
   if (!shareId) return <TrackerApp />;
 
   return (
@@ -2053,7 +2177,7 @@ function SharedProfitRoute() {
               Loading profit summary...
             </h1>
             <p className="mt-2 text-sm text-[#659287]">
-              Fetching the read-only snapshot.
+              Fetching the secure read-only summary.
             </p>
           </>
         ) : (
