@@ -842,7 +842,7 @@ function ProfitCashoutTab({ player, state, setState, settings }) {
           <h2 className="font-bold">Share profit summary</h2>
           <p className="mt-1 text-xs text-[#659287]">
             Creates a short read-only snapshot link with totals only—no raw
-            entries or account access. Short links expire after 180 days.
+            entries or account access. Short links expire after 30 days.
           </p>
           {shareFeedback ? (
             <p className="mt-2 text-xs font-bold text-[#527A70]">
