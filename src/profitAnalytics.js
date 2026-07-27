@@ -18,6 +18,8 @@ const SUMMARY_KEYS = [
 ];
 
 export const PAYOUT_THRESHOLD_PHP = 500;
+const PROFIT_SHARE_ID_PATTERN = /^[A-Za-z0-9_-]{10,16}$/;
+const PROFIT_SHARE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 
 function transactionsForPlayer(state, playerId) {
   return state.transactions.filter((entry) => entry.playerId === playerId);
@@ -302,9 +304,9 @@ function sanitizeProfitSnapshot(parsed) {
   };
 }
 
-function createShareId() {
+function createRandomToken(byteLength) {
   if (!globalThis.crypto?.getRandomValues) return null;
-  const bytes = new Uint8Array(8);
+  const bytes = new Uint8Array(byteLength);
   globalThis.crypto.getRandomValues(bytes);
   let binary = "";
   bytes.forEach((byte) => {
@@ -316,6 +318,10 @@ function createShareId() {
     .replace(/=+$/, "");
 }
 
+function rpcRow(data) {
+  return Array.isArray(data) ? data[0] : data;
+}
+
 function createShortShareUrl(id, location) {
   const url = new URL(location.href);
   url.pathname = `/s/${id}`;
@@ -324,23 +330,87 @@ function createShortShareUrl(id, location) {
   return url.toString();
 }
 
+export function isProfitShareActive(profitShare, now = new Date()) {
+  return Boolean(
+    PROFIT_SHARE_ID_PATTERN.test(String(profitShare?.id || "")) &&
+      PROFIT_SHARE_TOKEN_PATTERN.test(
+        String(profitShare?.editorToken || ""),
+      ) &&
+      new Date(profitShare.expiresAt).getTime() > new Date(now).getTime(),
+  );
+}
+
+export async function syncLiveProfitShare(snapshot, profitShare) {
+  if (!supabase || !isProfitShareActive(profitShare)) {
+    return { success: false };
+  }
+  try {
+    const { data, error } = await supabase.rpc("update_live_profit_share", {
+      p_id: profitShare.id,
+      p_editor_token: profitShare.editorToken,
+      p_snapshot: snapshot,
+    });
+    const row = rpcRow(data);
+    if (error || row?.share_id !== profitShare.id) {
+      return { success: false };
+    }
+    return {
+      success: true,
+      updatedAt: row.share_updated_at,
+      profitShare: {
+        ...profitShare,
+        expiresAt: row.share_expires_at || profitShare.expiresAt,
+      },
+    };
+  } catch {
+    return { success: false };
+  }
+}
+
 export async function createProfitShareLink(
   snapshot,
+  playerKey,
+  existingProfitShare = null,
   location = window.location,
 ) {
+  if (isProfitShareActive(existingProfitShare)) {
+    const synced = await syncLiveProfitShare(snapshot, existingProfitShare);
+    return {
+      url: createShortShareUrl(existingProfitShare.id, location),
+      short: true,
+      live: true,
+      syncPending: !synced.success,
+      profitShare: synced.profitShare || existingProfitShare,
+    };
+  }
+
   if (supabase) {
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const id = createShareId();
-        if (!id) break;
-        const { data, error } = await supabase.rpc("create_profit_share", {
-          p_id: id,
-          p_snapshot: snapshot,
-        });
-        if (!error && data === id) {
+        const id = createRandomToken(8);
+        const editorToken = createRandomToken(32);
+        if (!id || !editorToken) break;
+        const { data, error } = await supabase.rpc(
+          "create_live_profit_share",
+          {
+            p_id: id,
+            p_player_key: playerKey,
+            p_editor_token: editorToken,
+            p_snapshot: snapshot,
+          },
+        );
+        const row = rpcRow(data);
+        if (!error && row?.share_id === id) {
           return {
             url: createShortShareUrl(id, location),
             short: true,
+            live: true,
+            syncPending: false,
+            profitShare: {
+              id,
+              editorToken,
+              expiresAt: row.share_expires_at,
+            },
           };
         }
       }
@@ -351,6 +421,9 @@ export async function createProfitShareLink(
   return {
     url: createProfitShareUrl(snapshot, location),
     short: false,
+    live: false,
+    syncPending: false,
+    profitShare: null,
   };
 }
 
@@ -361,17 +434,24 @@ export function readProfitShareId(pathname = window.location.pathname) {
   return match?.[1] || null;
 }
 
-export async function loadProfitShareSnapshot(id) {
-  if (!supabase || !/^[A-Za-z0-9_-]{10,16}$/.test(String(id || ""))) {
+export async function loadProfitShare(id) {
+  if (!supabase || !PROFIT_SHARE_ID_PATTERN.test(String(id || ""))) {
     return null;
   }
-  const { data, error } = await supabase
-    .from("profit_share_snapshots")
-    .select("snapshot")
-    .eq("id", id)
-    .maybeSingle();
-  if (error || !data?.snapshot) return null;
-  return sanitizeProfitSnapshot(data.snapshot);
+  const { data, error } = await supabase.rpc("get_profit_share", {
+    p_id: id,
+  });
+  if (error) throw error;
+  const row = rpcRow(data);
+  if (!row?.share_snapshot) return null;
+  const snapshot = sanitizeProfitSnapshot(row.share_snapshot);
+  if (!snapshot) return null;
+  return {
+    snapshot,
+    live: row.share_kind === "live",
+    updatedAt: row.share_updated_at,
+    expiresAt: row.share_expires_at,
+  };
 }
 
 export function readProfitSnapshot(hash = window.location.hash) {
