@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Banknote,
   BarChart3,
   CalendarClock,
@@ -9,6 +10,7 @@ import {
   Copy,
   Download,
   FileDown,
+  Inbox,
   LogOut,
   Mail,
   Pickaxe,
@@ -27,6 +29,11 @@ import {
 } from "lucide-react";
 import AccountModal from "./AccountModal.jsx";
 import GmailAccountsTab from "./GmailAccountsTab.jsx";
+import {
+  PlayerSubmissionsTab,
+  SharedPlayerPortal,
+} from "./PlayerSubmissions.jsx";
+import ReferenceImagePanel from "./ReferenceImagePanel.jsx";
 import TradeScreenshotScanner from "./TradeScreenshotScanner.jsx";
 import {
   PlayerBalanceOverview,
@@ -36,6 +43,7 @@ import { SHELL_ITEMS } from "./sellablesData.js";
 import {
   buildPlayerBalanceAnalytics,
   buildPlayerProfitSnapshot,
+  createPlayerProfitInputLink,
   createProfitShareLink,
   isProfitShareActive,
   loadProfitShare,
@@ -44,6 +52,11 @@ import {
   readProfitShareId,
   readProfitSnapshot,
 } from "./profitAnalytics.js";
+import {
+  findDuplicateBatch,
+  quantitySignature,
+} from "./entryUtils.js";
+import { readPlayerSubmissionToken } from "./profitSubmissions.js";
 import {
   cashoutRatios,
   createId,
@@ -63,6 +76,7 @@ import {
 } from "./tracker.js";
 import { useCloudTracker } from "./useCloudTracker.js";
 import { useLiveProfitShares } from "./useLiveProfitShares.js";
+import { useProfitSubmissions } from "./useProfitSubmissions.js";
 
 const input =
   "w-full rounded-xl border border-[#B1D3B9] bg-white px-3 py-2.5 text-center font-bold outline-none focus:border-[#527A70]";
@@ -176,10 +190,15 @@ function CloudStatus({ cloud }) {
   );
 }
 
-function MainTabs({ activeTab, gmailCount, onTabChange }) {
+function MainTabs({
+  activeTab,
+  gmailCount,
+  pendingSubmissionCount,
+  onTabChange,
+}) {
   return (
     <div
-      className="mb-7 grid max-w-xl grid-cols-2 gap-2 rounded-2xl border border-[#B1D3B9] bg-white p-2"
+      className="mb-7 grid max-w-3xl grid-cols-3 gap-2 rounded-2xl border border-[#B1D3B9] bg-white p-2"
       role="tablist"
       aria-label="Main tracker sections"
     >
@@ -205,6 +224,30 @@ function MainTabs({ activeTab, gmailCount, onTabChange }) {
             className={`rounded-full px-2 py-0.5 text-xs ${activeTab === "gmail" ? "bg-white/20" : "bg-[#E6F2DD]"}`}
           >
             {gmailCount}
+          </span>
+        ) : null}
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "submissions"}
+        onClick={() => onTabChange("submissions")}
+        className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold ${
+          activeTab === "submissions"
+            ? "bg-[#527A70] text-white"
+            : "text-[#527A70] hover:bg-[#F2F8ED]"
+        }`}
+      >
+        <Inbox size={17} /> Player Inputs
+        {pendingSubmissionCount ? (
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs ${
+              activeTab === "submissions"
+                ? "bg-white/20"
+                : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {pendingSubmissionCount}
           </span>
         ) : null}
       </button>
@@ -771,8 +814,11 @@ function ProfitCashoutTab({
   );
 
   const hasActiveLiveLink = isProfitShareActive(player.profitShare);
-  const currentProfitShareLink = async () => {
-    const share = await createProfitShareLink(
+  const currentProfitShareLink = async (playerInput = false) => {
+    const createLink = playerInput
+      ? createPlayerProfitInputLink
+      : createProfitShareLink;
+    const share = await createLink(
       buildPlayerProfitSnapshot(player, state),
       player.id,
       player.profitShare,
@@ -786,6 +832,8 @@ function ProfitCashoutTab({
         if (
           currentShare?.id === share.profitShare.id &&
           currentShare?.editorToken === share.profitShare.editorToken &&
+          currentShare?.submissionToken ===
+            share.profitShare.submissionToken &&
           currentShare?.expiresAt === share.profitShare.expiresAt
         ) {
           return current;
@@ -832,29 +880,51 @@ function ProfitCashoutTab({
     }
   };
 
+  const copyPlayerInputLink = async () => {
+    setIsCreatingShareLink(true);
+    setShareFeedback("Enabling secure player input…");
+    try {
+      const share = await currentProfitShareLink(true);
+      if (!share.inputEnabled) {
+        setShareFeedback(
+          "Player input requires a signed-in cloud account and an active live link.",
+        );
+        return;
+      }
+      await copyText(share.url);
+      setShareFeedback(
+        "Player input link copied. The player can submit entries for your approval.",
+      );
+    } catch {
+      setShareFeedback("Hindi ma-create ang player input link.");
+    } finally {
+      setIsCreatingShareLink(false);
+    }
+  };
+
   const shareProfitSummary = async () => {
     setIsCreatingShareLink(true);
     setShareFeedback("Creating short link...");
     try {
-      const share = await currentProfitShareLink();
+      const share = await currentProfitShareLink(true);
+      if (!share.inputEnabled) {
+        setShareFeedback(
+          "Player input requires a signed-in cloud account and an active live link.",
+        );
+        return;
+      }
       if (navigator.share) {
         await navigator.share({
-          title: `${player.name} · TRO profit summary`,
-          text: `Live read-only profit summary for ${player.name}`,
+          title: `${player.name} · TRO player portal`,
+          text: `View your live profit summary and submit shell entries for approval.`,
           url: share.url,
         });
         setShareFeedback(
-          share.live
-            ? share.syncPending
-              ? "Live summary shared. Pending changes sync when online."
-              : "Live profit summary shared."
-            : "Static fallback summary shared.",
+          "Player portal shared. New entries will wait for your approval.",
         );
       } else {
         await copyText(share.url);
-        setShareFeedback(
-          share.live ? "Live link copied." : "Static fallback link copied.",
-        );
+        setShareFeedback("Player input link copied.");
       }
     } catch (error) {
       if (error?.name !== "AbortError") {
@@ -898,9 +968,9 @@ function ProfitCashoutTab({
         <div>
           <h2 className="font-bold">Share profit summary</h2>
           <p className="mt-1 text-xs text-[#659287]">
-            One secure read-only live link per player. New saved inputs,
-            edits, and payouts update the same link automatically. Totals only—
-            no raw entries or account access. Expires 30 days after creation.
+            The view-only link shows confirmed totals. The player input link
+            also lets this player submit entries for your approval. Both use
+            the same live 30-day player summary.
           </p>
           {!cloudAccountActive && !hasActiveLiveLink ? (
             <p className="mt-2 text-xs font-bold text-amber-700">
@@ -925,7 +995,7 @@ function ProfitCashoutTab({
             </p>
           ) : null}
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-2">
           <button
             type="button"
             onClick={copyProfitSummaryLink}
@@ -933,7 +1003,16 @@ function ProfitCashoutTab({
             disabled={isCreatingShareLink}
           >
             <Copy size={16} />{" "}
-            {isCreatingShareLink ? "Creating..." : "Copy link"}
+            {isCreatingShareLink ? "Creating..." : "Copy view-only"}
+          </button>
+          <button
+            type="button"
+            onClick={copyPlayerInputLink}
+            className={soft}
+            disabled={isCreatingShareLink}
+          >
+            <Inbox size={16} />{" "}
+            {isCreatingShareLink ? "Creating..." : "Copy player link"}
           </button>
           <button
             type="button"
@@ -1198,6 +1277,9 @@ function PlayerCalculator({
   const [editingBatchId, setEditingBatchId] = useState(null);
   const [activeTab, setActiveTab] = useState("calculator");
   const [feedback, setFeedback] = useState("");
+  const [duplicateConfirmedSignature, setDuplicateConfirmedSignature] =
+    useState("");
+  const [referenceResetKey, setReferenceResetKey] = useState(0);
   const firstInputAt = useMemo(
     () => playerFirstInputAt(rawState.transactions, player.id),
     [player.id, rawState.transactions],
@@ -1233,6 +1315,18 @@ function PlayerCalculator({
   );
   const previewTro = previewGralats / entrySettings.gralatsPerTro;
   const previewDeduction = (parsedShovels || 0) * entrySettings.shovelTro;
+  const currentQuantitySignature = quantitySignature(
+    parsedQuantities,
+    parsedShovels,
+  );
+  const duplicateMatch = hasInvalidExpression
+    ? null
+    : findDuplicateBatch(
+        records,
+        player.id,
+        parsedQuantities,
+        parsedShovels,
+      );
   const saveBatch = () => {
     if (hasInvalidExpression) {
       setFeedback("May invalid o incomplete expression. Example: 100+200");
@@ -1287,6 +1381,18 @@ function PlayerCalculator({
       setFeedback("Maglagay muna ng shell quantity o shovel.");
       return;
     }
+    if (
+      duplicateMatch &&
+      duplicateConfirmedSignature !== currentQuantitySignature
+    ) {
+      setDuplicateConfirmedSignature(currentQuantitySignature);
+      setFeedback(
+        duplicateMatch.kind === "exact"
+          ? `Possible exact duplicate from ${displayTimestamp(duplicateMatch.createdAt)}. Review it, then press Save anyway.`
+          : `The same shell quantities were saved on ${displayTimestamp(duplicateMatch.createdAt)}, but the shovel count differs. Review it, then press Save anyway.`,
+      );
+      return;
+    }
     setState((current) => ({
       ...current,
       transactions: [...shellRecords, ...shovelRecord, ...current.transactions],
@@ -1294,6 +1400,8 @@ function PlayerCalculator({
     setQuantities(emptyQuantities());
     setShovels("");
     setEntryTimestamp(localDateTimeInput());
+    setDuplicateConfirmedSignature("");
+    setReferenceResetKey((current) => current + 1);
     setFeedback(`Saved: ${displayTimestamp(timestamp)}`);
   };
   const batches = Array.from(
@@ -1425,6 +1533,9 @@ function PlayerCalculator({
           <p className="mt-1 text-sm text-[#659287]">
             Enter a number or expression such as 100+200.
           </p>
+          <div className="mt-4">
+            <ReferenceImagePanel resetKey={referenceResetKey} />
+          </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {SHELL_ITEMS.map((item) => (
               <label
@@ -1479,8 +1590,28 @@ function PlayerCalculator({
               aria-label="Shovel quantity"
             />
           </label>
+          {duplicateMatch ? (
+            <p
+              className={`mt-4 flex items-start gap-2 rounded-xl p-3 text-sm font-bold ${
+                duplicateMatch.kind === "exact"
+                  ? "bg-red-50 text-red-700"
+                  : "bg-amber-50 text-amber-800"
+              }`}
+            >
+              <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+              {duplicateMatch.kind === "exact"
+                ? "Possible exact duplicate: the same shell and shovel quantities"
+                : "The same shell quantities already exist with a different shovel count"}
+              {" from "}
+              {displayTimestamp(duplicateMatch.createdAt)}.
+            </p>
+          ) : null}
           <button onClick={saveBatch} className={`mt-5 w-full ${primary}`}>
-            <Save size={17} /> Save entry
+            <Save size={17} />{" "}
+            {duplicateMatch &&
+            duplicateConfirmedSignature === currentQuantitySignature
+              ? "Save anyway"
+              : "Save entry"}
           </button>
           {feedback ? (
             <p className="mt-3 text-center text-sm font-bold text-[#527A70]">
@@ -1687,6 +1818,9 @@ function TrackerApp() {
   const [accountOpen, setAccountOpen] = useState(false);
   const importRef = useRef(null);
   const cloud = useCloudTracker(state, setState);
+  const submissionsController = useProfitSubmissions(
+    Boolean(cloud.session),
+  );
   useLiveProfitShares(state);
   useEffect(() => saveState(state), [state]);
   const balanceAnalytics = useMemo(
@@ -1858,6 +1992,7 @@ function TrackerApp() {
           <MainTabs
             activeTab={mainTab}
             gmailCount={(state.gmailAccounts || []).length}
+            pendingSubmissionCount={submissionsController.pendingCount}
             onTabChange={setMainTab}
           />
         ) : null}
@@ -1871,6 +2006,12 @@ function TrackerApp() {
           />
         ) : mainTab === "gmail" ? (
           <GmailAccountsTab state={state} setState={setState} />
+        ) : mainTab === "submissions" ? (
+          <PlayerSubmissionsTab
+            state={state}
+            cloud={cloud}
+            submissionsController={submissionsController}
+          />
         ) : (
           <>
             <header className="flex items-end justify-between gap-4">
@@ -2084,6 +2225,10 @@ function TrackerApp() {
 function SharedProfitRoute() {
   const embeddedSnapshot = useMemo(() => readProfitSnapshot(), []);
   const shareId = useMemo(() => readProfitShareId(), []);
+  const submissionToken = useMemo(
+    () => readPlayerSubmissionToken(),
+    [],
+  );
   const [remoteShare, setRemoteShare] = useState(null);
   const [shareStatus, setShareStatus] = useState(
     shareId ? "loading" : "none",
@@ -2155,6 +2300,21 @@ function SharedProfitRoute() {
 
   const snapshot = embeddedSnapshot || remoteShare?.snapshot;
   if (snapshot) {
+    if (
+      shareId &&
+      submissionToken &&
+      remoteShare?.live &&
+      !embeddedSnapshot
+    ) {
+      return (
+        <SharedPlayerPortal
+          snapshot={snapshot}
+          share={remoteShare}
+          shareId={shareId}
+          submissionToken={submissionToken}
+        />
+      );
+    }
     return (
       <SharedProfitSummary
         snapshot={snapshot}

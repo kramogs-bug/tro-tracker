@@ -4,6 +4,12 @@ import {
   summarize,
   summarizePeriods,
 } from "./tracker.js";
+import { SHELL_ITEMS } from "./sellablesData.js";
+import {
+  createPlayerInputUrl,
+  createSubmissionToken,
+  enableProfitSubmissions,
+} from "./profitSubmissions.js";
 import { supabase } from "./supabaseClient.js";
 
 const SUMMARY_KEYS = [
@@ -195,6 +201,19 @@ export function buildPlayerProfitSnapshot(player, state, now = new Date()) {
           : gainChangeRatio(day.summary.netPhp, days[index - 1].summary.netPhp),
     }))
     .slice(1);
+  const ratioHistory = Object.fromEntries(
+    Object.entries(player.ratioHistory || {})
+      .filter(([date]) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+      .toSorted(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .slice(-40),
+  );
+  const confirmedSubmissionIds = Array.from(
+    new Set(
+      transactions
+        .map((entry) => entry.sourceSubmissionId)
+        .filter(Boolean),
+    ),
+  ).slice(0, 50);
 
   return {
     kind: "tro-profit-summary",
@@ -225,6 +244,15 @@ export function buildPlayerProfitSnapshot(player, state, now = new Date()) {
       yesterdaySummary.netPhp,
     ),
     dailyHistory,
+    entryConfig: {
+      items: SHELL_ITEMS.map((item) => ({
+        name: item.name,
+        price: item.price,
+      })),
+      defaultRatios: settings,
+      ratioHistory,
+    },
+    confirmedSubmissionIds,
   };
 }
 
@@ -252,6 +280,47 @@ function safeSummary(value) {
       return [key, Number.isFinite(number) ? number : 0];
     }),
   );
+}
+
+function safeShareRatios(value, fallback = null) {
+  const defaults = fallback || {
+    gralatsPerTro: 3.8,
+    shovelTro: 3,
+    phpTro: 1600,
+    phpAmount: 50,
+  };
+  return Object.fromEntries(
+    ["gralatsPerTro", "shovelTro", "phpTro", "phpAmount"].map((key) => {
+      const number = Number(value?.[key]);
+      return [key, number > 0 ? number : defaults[key]];
+    }),
+  );
+}
+
+function safeEntryConfig(value) {
+  const defaultRatios = safeShareRatios(value?.defaultRatios);
+  const ratioHistory = Object.fromEntries(
+    Object.entries(
+      value?.ratioHistory && typeof value.ratioHistory === "object"
+        ? value.ratioHistory
+        : {},
+    )
+      .filter(([date]) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+      .toSorted(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .slice(-40)
+      .map(([date, ratios]) => [
+        date,
+        safeShareRatios(ratios, defaultRatios),
+      ]),
+  );
+  return {
+    items: SHELL_ITEMS.map((item) => ({
+      name: item.name,
+      price: item.price,
+    })),
+    defaultRatios,
+    ratioHistory,
+  };
 }
 
 export function createProfitShareUrl(snapshot, location = window.location) {
@@ -300,6 +369,12 @@ function sanitizeProfitSnapshot(parsed) {
           changeRatio:
             day?.changeRatio === null ? null : Number(day?.changeRatio) || 0,
         }))
+      : [],
+    entryConfig: safeEntryConfig(parsed.entryConfig),
+    confirmedSubmissionIds: Array.isArray(parsed.confirmedSubmissionIds)
+      ? parsed.confirmedSubmissionIds
+          .filter((id) => typeof id === "string")
+          .slice(-50)
       : [],
   };
 }
@@ -389,13 +464,15 @@ export async function createProfitShareLink(
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const id = createRandomToken(8);
         const editorToken = createRandomToken(32);
-        if (!id || !editorToken) break;
+        const submissionToken = createSubmissionToken();
+        if (!id || !editorToken || !submissionToken) break;
         const { data, error } = await supabase.rpc(
           "create_live_profit_share",
           {
             p_id: id,
             p_player_key: playerKey,
             p_editor_token: editorToken,
+            p_submission_token: submissionToken,
             p_snapshot: snapshot,
           },
         );
@@ -409,6 +486,7 @@ export async function createProfitShareLink(
             profitShare: {
               id,
               editorToken,
+              submissionToken,
               expiresAt: row.share_expires_at,
             },
           };
@@ -424,6 +502,52 @@ export async function createProfitShareLink(
     live: false,
     syncPending: false,
     profitShare: null,
+  };
+}
+
+export async function createPlayerProfitInputLink(
+  snapshot,
+  playerKey,
+  existingProfitShare = null,
+  location = window.location,
+) {
+  const share = await createProfitShareLink(
+    snapshot,
+    playerKey,
+    existingProfitShare,
+    location,
+  );
+  if (!share.live || !share.profitShare) {
+    return { ...share, inputEnabled: false };
+  }
+
+  let profitShare = share.profitShare;
+  if (!profitShare.submissionToken) {
+    const submissionToken = createSubmissionToken();
+    if (!submissionToken) {
+      return { ...share, inputEnabled: false };
+    }
+    try {
+      const enabled = await enableProfitSubmissions(
+        profitShare,
+        submissionToken,
+      );
+      if (!enabled) return { ...share, inputEnabled: false };
+      profitShare = enabled;
+    } catch {
+      return { ...share, inputEnabled: false };
+    }
+  }
+
+  return {
+    ...share,
+    url: createPlayerInputUrl(
+      profitShare.id,
+      profitShare.submissionToken,
+      location,
+    ),
+    inputEnabled: true,
+    profitShare,
   };
 }
 

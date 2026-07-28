@@ -257,6 +257,33 @@ export function useCloudTracker(state, setState) {
     }
   }, [cloudReady, pullLatest, userId]);
 
+  const commitState = useCallback(
+    async (transform) => {
+      if (
+        !supabase ||
+        !userId ||
+        !cloudReady ||
+        !navigator.onLine ||
+        typeof transform !== "function"
+      ) {
+        return false;
+      }
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const nextState = normalizeState(transform(stateRef.current));
+        stateRef.current = nextState;
+        setState(nextState);
+        if (await syncNow()) return true;
+        if (!navigator.onLine) return false;
+        await pullLatest(
+          "Newer cloud data loaded before retrying the approval",
+        );
+      }
+      return false;
+    },
+    [cloudReady, pullLatest, setState, syncNow, userId],
+  );
+
   useEffect(() => {
     if (!supabase || !userId || !cloudReady) return undefined;
     const channel = supabase
@@ -360,6 +387,7 @@ export function useCloudTracker(state, setState) {
     syncStatus,
     syncMessage,
     syncNow,
+    commitState,
     signOut,
     cloudConfigured: isCloudConfigured,
   };
