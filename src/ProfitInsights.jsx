@@ -208,7 +208,7 @@ export function PlayerBalanceOverview({ analytics, onOpenPlayer }) {
   );
 }
 
-function SummaryCard({ label, summary }) {
+function SummaryCard({ label, summary, projectedSummary = null }) {
   return (
     <article className="rounded-2xl border border-[#B1D3B9] bg-white p-5">
       <p className="text-xs font-bold uppercase text-[#659287]">{label}</p>
@@ -220,14 +220,30 @@ function SummaryCard({ label, summary }) {
         Before shovel: {peso(summary.grossPhp)} · {format(summary.shovels)}{" "}
         shovels
       </p>
+      {projectedSummary ? (
+        <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+          Projected if approved: {peso(projectedSummary.netPhp)} ·{" "}
+          {format(projectedSummary.netTro)} TRO
+        </p>
+      ) : null}
     </article>
   );
 }
 
-export function SharedProfitSummary({ snapshot, share = null }) {
+export function SharedProfitSummary({
+  snapshot,
+  share = null,
+  projectedSnapshot = null,
+  pendingSummary = null,
+  pendingCount = 0,
+  embedded = false,
+}) {
   const payout = payoutDetails(snapshot.balance.php);
+  const Root = embedded ? "div" : "main";
   return (
-    <main className="min-h-screen bg-[#E6F2DD] px-4 py-7 text-[#29453E]">
+    <Root
+      className={`${embedded ? "" : "min-h-screen bg-[#E6F2DD]"} px-4 py-7 text-[#29453E]`}
+    >
       <div className="mx-auto max-w-5xl">
         <header className="rounded-3xl bg-[#29453E] p-6 text-white sm:p-8">
           <div className="flex flex-col justify-between gap-5 sm:flex-row">
@@ -313,10 +329,68 @@ export function SharedProfitSummary({ snapshot, share = null }) {
           ) : null}
         </header>
 
+        {pendingCount > 0 && projectedSnapshot ? (
+          <section className="mt-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-950">
+            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+              <div>
+                <p className="text-sm font-bold uppercase text-amber-800">
+                  Not confirmed · {pendingCount} pending entr
+                  {pendingCount === 1 ? "y" : "ies"}
+                </p>
+                <h2 className="mt-1 text-xl font-bold">
+                  Projected summary if approved
+                </h2>
+                <p className="mt-1 text-sm text-amber-800">
+                  These amounts are previews only and are not included in the
+                  confirmed payout balance.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-right">
+                <div>
+                  <p className="text-xs font-bold uppercase text-amber-800">
+                    Pending net
+                  </p>
+                  <strong className="mt-1 block">
+                    {peso(pendingSummary?.netPhp, true)}
+                  </strong>
+                  <small>{format(pendingSummary?.netTro)} TRO</small>
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase text-amber-800">
+                    Projected balance
+                  </p>
+                  <strong className="mt-1 block text-xl">
+                    {peso(projectedSnapshot.balance.php)}
+                  </strong>
+                  <small>{format(projectedSnapshot.balance.tro)} TRO</small>
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
         <section className="mt-5 grid gap-3 sm:grid-cols-3">
-          <SummaryCard label="Today" summary={snapshot.summaries.today} />
-          <SummaryCard label="This week" summary={snapshot.summaries.week} />
-          <SummaryCard label="This month" summary={snapshot.summaries.month} />
+          <SummaryCard
+            label="Today"
+            summary={snapshot.summaries.today}
+            projectedSummary={
+              pendingCount ? projectedSnapshot?.summaries.today : null
+            }
+          />
+          <SummaryCard
+            label="This week"
+            summary={snapshot.summaries.week}
+            projectedSummary={
+              pendingCount ? projectedSnapshot?.summaries.week : null
+            }
+          />
+          <SummaryCard
+            label="This month"
+            summary={snapshot.summaries.month}
+            projectedSummary={
+              pendingCount ? projectedSnapshot?.summaries.month : null
+            }
+          />
         </section>
 
         <section className="mt-5 overflow-hidden rounded-2xl border border-[#B1D3B9] bg-white">
@@ -363,6 +437,6 @@ export function SharedProfitSummary({ snapshot, share = null }) {
           )}
         </footer>
       </div>
-    </main>
+    </Root>
   );
 }

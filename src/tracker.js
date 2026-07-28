@@ -148,6 +148,7 @@ export function saveState(state) {
 function normalizeProfitShare(value) {
   const id = String(value?.id || "");
   const editorToken = String(value?.editorToken || "");
+  const submissionToken = String(value?.submissionToken || "");
   const expiresAt = String(value?.expiresAt || "");
   if (
     !PROFIT_SHARE_ID_PATTERN.test(id) ||
@@ -156,7 +157,14 @@ function normalizeProfitShare(value) {
   ) {
     return null;
   }
-  return { id, editorToken, expiresAt };
+  return {
+    id,
+    editorToken,
+    expiresAt,
+    submissionToken: PROFIT_SHARE_TOKEN_PATTERN.test(submissionToken)
+      ? submissionToken
+      : null,
+  };
 }
 
 export function normalizeState(value) {
@@ -219,6 +227,9 @@ export function normalizeState(value) {
               t.ratios,
               player?.settings || fallbackSettings,
             ),
+            sourceSubmissionId: t.sourceSubmissionId
+              ? String(t.sourceSubmissionId).slice(0, 128)
+              : null,
           };
         })
     : [];
