@@ -194,7 +194,8 @@ export default function TradeScreenshotScanner({ onApply }) {
                 Detection ready · {format(result.confidence, 0)}% confidence
               </p>
               <p className="mt-1 text-xs text-[#659287]">
-                Review the detected values, then apply them to the calculator.
+                Spatial OCR matched quantities to their item labels. Review
+                highlighted fields before applying.
               </p>
             </div>
             <button type="button" onClick={clear} aria-label="Clear screenshot">
@@ -206,7 +207,7 @@ export default function TradeScreenshotScanner({ onApply }) {
             <img
               src={previewUrl}
               alt="Uploaded trade screenshot"
-              className="h-40 w-full rounded-xl border border-[#E6F2DD] object-cover"
+              className="h-40 w-full rounded-xl border border-[#E6F2DD] object-contain"
             />
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {SHELL_ITEMS.map((item) => (
@@ -216,7 +217,7 @@ export default function TradeScreenshotScanner({ onApply }) {
                 >
                   <span className="flex items-center justify-between gap-2">
                     {item.name}
-                    {(result.fieldConfidence?.[item.name] || 0) < 75 ? (
+                    {(result.fieldConfidence?.[item.name] || 0) < 85 ? (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
                         Review
                       </span>
@@ -244,7 +245,7 @@ export default function TradeScreenshotScanner({ onApply }) {
               <label className="rounded-xl bg-[#F8FBF5] p-3 text-xs font-bold text-[#527A70]">
                 <span className="flex items-center justify-between gap-2">
                   Shovels
-                  {(result.fieldConfidence?.Shovels || 0) < 75 ? (
+                  {(result.fieldConfidence?.Shovels || 0) < 85 ? (
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">
                       Review
                     </span>
@@ -285,8 +286,8 @@ export default function TradeScreenshotScanner({ onApply }) {
             </button>
           </div>
           <p className="mt-3 text-center text-xs text-[#659287]">
-            Corrections teach this browser which scan area and OCR mode work
-            best. Images and quantities are not stored for training.
+            Corrections calibrate which OCR pass is most reliable for each
+            field on this browser. Images and quantities are not stored.
           </p>
         </div>
       ) : null}
