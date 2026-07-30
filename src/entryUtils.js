@@ -62,6 +62,7 @@ export function findDuplicateBatch(
   playerId,
   quantities,
   shovels,
+  { excludeSourceSubmissionId = null } = {},
 ) {
   const normalized = normalizeQuantities(quantities);
   const normalizedShovels = Math.max(
@@ -79,7 +80,12 @@ export function findDuplicateBatch(
   const targetExact = quantitySignature(normalized, normalizedShovels);
   const batches = Array.from(
     transactions
-      .filter((entry) => entry.playerId === playerId)
+      .filter(
+        (entry) =>
+          entry.playerId === playerId &&
+          (!excludeSourceSubmissionId ||
+            entry.sourceSubmissionId !== excludeSourceSubmissionId),
+      )
       .reduce((groups, entry) => {
         const batch = groups.get(entry.batchId) || [];
         batch.push(entry);

@@ -3,12 +3,15 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  Expand,
+  ImageIcon,
   Inbox,
   LoaderCircle,
   Pencil,
   RefreshCw,
   Send,
   ShieldCheck,
+  X,
   XCircle,
 } from "lucide-react";
 import { SharedProfitSummary } from "./ProfitInsights.jsx";
@@ -25,7 +28,9 @@ import {
 } from "./entryUtils.js";
 import {
   createClientSubmissionId,
+  loadProfitSubmissionEvidence,
   loadPlayerProfitSubmissions,
+  prepareSubmissionReference,
   reviewProfitSubmission,
   submitProfitEntry,
 } from "./profitSubmissions.js";
@@ -79,11 +84,25 @@ function SubmissionStatusList({ submissions }) {
           >
             <div>
               <p className="text-sm font-bold">
-                Entry for {submission.entryDate}
+                Entry timestamp:{" "}
+                {displayTimestamp(
+                  submission.approvedEntryAt || submission.entryAt,
+                )}
               </p>
               <p className="mt-1 text-xs text-[#659287]">
                 Submitted {displayTimestamp(submission.createdAt)}
               </p>
+              {submission.hasReferenceImage &&
+              submission.status === "pending" ? (
+                <p className="mt-1 text-xs font-bold text-[#527A70]">
+                  Reference screenshot attached
+                </p>
+              ) : null}
+              {submission.status === "approved" ? (
+                <p className="mt-1 text-xs font-bold text-green-700">
+                  Confirmed in your tracker summary
+                </p>
+              ) : null}
               {submission.reviewNote ? (
                 <p className="mt-2 text-xs font-bold text-[#527A70]">
                   Note from reviewer: {submission.reviewNote}
@@ -122,6 +141,7 @@ function PlayerSubmissionForm({
   const [feedback, setFeedback] = useState("");
   const [confirmedSignature, setConfirmedSignature] = useState("");
   const [referenceResetKey, setReferenceResetKey] = useState(0);
+  const [referenceFile, setReferenceFile] = useState(null);
 
   const parsedQuantities = normalizeQuantities(quantities);
   const parsedShovels = Math.max(0, Math.floor(Number(shovels) || 0));
@@ -166,8 +186,15 @@ function PlayerSubmissionForm({
     }
 
     setIsSaving(true);
-    setFeedback("Submitting for approval…");
+    setFeedback(
+      referenceFile
+        ? "Compressing and attaching reference screenshot…"
+        : "Submitting for approval…",
+    );
     try {
+      const referenceImage = referenceFile
+        ? await prepareSubmissionReference(referenceFile)
+        : null;
       await submitProfitEntry({
         shareId,
         submissionToken,
@@ -177,6 +204,7 @@ function PlayerSubmissionForm({
         entryDate,
         entryAt: selectedTime.toISOString(),
         note,
+        referenceImage,
       });
       setQuantities(blankQuantities());
       setShovels("");
@@ -184,6 +212,7 @@ function PlayerSubmissionForm({
       setNote("");
       setClientSubmissionId(createClientSubmissionId());
       setConfirmedSignature("");
+      setReferenceFile(null);
       setReferenceResetKey((current) => current + 1);
       setFeedback(
         "Submitted. It is visible in your projected summary but is not confirmed yet.",
@@ -216,6 +245,8 @@ function PlayerSubmissionForm({
           <ReferenceImagePanel
             resetKey={referenceResetKey}
             compact
+            temporaryUpload
+            onFileChange={setReferenceFile}
           />
           <label className="mt-4 block text-sm font-bold">
             Entry date and time
@@ -453,6 +484,110 @@ export function SharedPlayerPortal({
   );
 }
 
+function SubmissionEvidencePreview({ submission }) {
+  const [evidence, setEvidence] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    if (evidence || loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      const next = await loadProfitSubmissionEvidence(submission.id);
+      if (!next) {
+        setError("Reference screenshot is no longer available.");
+        return;
+      }
+      setEvidence(next);
+    } catch (loadError) {
+      setError(loadError?.message || "Could not load reference screenshot.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="mt-4 rounded-2xl border border-dashed border-[#88BDA4] bg-[#F8FBF5] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <ImageIcon size={17} className="text-[#527A70]" />
+          <div>
+            <p className="text-sm font-bold">Player reference screenshot</p>
+            <p className="text-xs text-[#659287]">
+              Loaded only when requested; deleted after review.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className={soft}
+        >
+          {loading ? (
+            <LoaderCircle size={15} className="animate-spin" />
+          ) : (
+            <ImageIcon size={15} />
+          )}
+          {evidence ? "Screenshot loaded" : "View screenshot"}
+        </button>
+      </div>
+      {error ? (
+        <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-bold text-red-700">
+          {error}
+        </p>
+      ) : null}
+      {evidence ? (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="group relative block w-full overflow-hidden rounded-xl border border-[#E6F2DD] bg-[#29453E]/5"
+            aria-label="Open player reference screenshot"
+          >
+            <img
+              src={evidence.dataUrl}
+              alt="Player-submitted trade reference"
+              className="max-h-72 w-full object-contain"
+            />
+            <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-lg bg-white/95 px-2 py-1 text-xs font-bold text-[#527A70] shadow">
+              <Expand size={14} /> Full size
+            </span>
+          </button>
+          <p className="mt-2 text-right text-[11px] text-[#659287]">
+            Temporary compressed copy ·{" "}
+            {Math.max(1, Math.round(evidence.size / 1024))} KB
+          </p>
+        </div>
+      ) : null}
+      {expanded && evidence ? (
+        <div
+          className="fixed inset-0 z-[70] grid place-items-center bg-[#29453E]/90 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Full-size player reference screenshot"
+        >
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="absolute right-4 top-4 rounded-xl bg-white p-3 text-[#29453E]"
+            aria-label="Close player reference screenshot"
+          >
+            <X size={20} />
+          </button>
+          <img
+            src={evidence.dataUrl}
+            alt="Full-size player-submitted trade reference"
+            className="max-h-full max-w-full object-contain"
+          />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function SubmissionReviewCard({
   submission,
   player,
@@ -498,15 +633,16 @@ function SubmissionReviewCard({
     parsedShovels,
     ratios,
   );
+  const alreadyApplied = submissionAlreadyApplied(
+    state.transactions,
+    submission.id,
+  );
   const duplicate = findDuplicateBatch(
     state.transactions,
     player.id,
     parsedQuantities,
     parsedShovels,
-  );
-  const alreadyApplied = submissionAlreadyApplied(
-    state.transactions,
-    submission.id,
+    { excludeSourceSubmissionId: submission.id },
   );
 
   const approve = async () => {
@@ -548,6 +684,7 @@ function SubmissionReviewCard({
         quantities: parsedQuantities,
         shovels: parsedShovels,
         entryDate,
+        entryAt: transactions[0].createdAt,
       });
       setFeedback("Approved and added to the confirmed tracker.");
       await onReviewed();
@@ -592,8 +729,10 @@ function SubmissionReviewCard({
             </span>
           </div>
           <p className="mt-1 text-xs text-[#659287]">
-            Submitted {displayTimestamp(submission.createdAt)} · Entry date{" "}
-            {submission.entryDate}
+            Submitted {displayTimestamp(submission.createdAt)} · Entry{" "}
+            {displayTimestamp(
+              submission.approvedEntryAt || submission.entryAt,
+            )}
           </p>
           {submission.note ? (
             <p className="mt-2 text-sm text-[#527A70]">
@@ -611,6 +750,10 @@ function SubmissionReviewCard({
           </button>
         ) : null}
       </div>
+
+      {submission.hasReferenceImage ? (
+        <SubmissionEvidencePreview submission={submission} />
+      ) : null}
 
       <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {SHELL_ITEMS.map((item) => (

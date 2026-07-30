@@ -2,8 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { Expand, ImageUp, RotateCw, X } from "lucide-react";
 
 const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
+const REFERENCE_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/pjpeg",
+  "image/png",
+  "image/webp",
+]);
+const REFERENCE_IMAGE_EXTENSION = /\.(?:jpe?g|png|webp)$/i;
 
-export default function ReferenceImagePanel({ resetKey = 0, compact = false }) {
+export default function ReferenceImagePanel({
+  resetKey = 0,
+  compact = false,
+  temporaryUpload = false,
+  onFileChange = null,
+}) {
   const inputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState("");
   const [rotation, setRotation] = useState(0);
@@ -15,12 +28,18 @@ export default function ReferenceImagePanel({ resetKey = 0, compact = false }) {
     setRotation(0);
     setExpanded(false);
     setError("");
+    onFileChange?.(null);
     if (inputRef.current) inputRef.current.value = "";
   };
 
   useEffect(() => {
-    clear();
-  }, [resetKey]);
+    setPreviewUrl("");
+    setRotation(0);
+    setExpanded(false);
+    setError("");
+    onFileChange?.(null);
+    if (inputRef.current) inputRef.current.value = "";
+  }, [onFileChange, resetKey]);
 
   useEffect(
     () => () => {
@@ -31,7 +50,10 @@ export default function ReferenceImagePanel({ resetKey = 0, compact = false }) {
 
   const choose = (file) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
+    if (
+      !REFERENCE_IMAGE_TYPES.has(file.type) &&
+      !REFERENCE_IMAGE_EXTENSION.test(file.name)
+    ) {
       setError("Please choose a JPG, PNG, or WebP image.");
       return;
     }
@@ -43,6 +65,7 @@ export default function ReferenceImagePanel({ resetKey = 0, compact = false }) {
       if (current) URL.revokeObjectURL(current);
       return URL.createObjectURL(file);
     });
+    onFileChange?.(file);
     setRotation(0);
     setError("");
   };
@@ -57,8 +80,9 @@ export default function ReferenceImagePanel({ resetKey = 0, compact = false }) {
         <div>
           <h3 className="text-sm font-bold">Reference screenshot</h3>
           <p className="mt-1 text-xs text-[#659287]">
-            Manual reference only. The image stays on this device and is not
-            uploaded or saved.
+            {temporaryUpload
+              ? "Optional. A compressed copy is stored temporarily for review and deleted after approval or rejection."
+              : "Manual reference only. The image stays on this device and is not uploaded or saved."}
           </p>
         </div>
         <button
