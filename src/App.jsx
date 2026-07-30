@@ -1732,6 +1732,11 @@ function PlayerCalculator({
                   <strong className="text-sm">
                     {displayTimestamp(batch[0].createdAt)}
                   </strong>
+                  {batch[0].sourceSubmissionId ? (
+                    <span className="ml-2 inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-800">
+                      Approved player input
+                    </span>
+                  ) : null}
                   <p className="mt-1 text-xs font-bold text-[#527A70]">
                     Profit date: {batch[0].date}
                   </p>
