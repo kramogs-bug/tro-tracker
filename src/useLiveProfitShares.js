@@ -4,6 +4,7 @@ import {
   isProfitShareActive,
   syncLiveProfitShare,
 } from "./profitAnalytics.js";
+import { buildTeamDailyBoard } from "./teamBoardAnalytics.js";
 
 export function useLiveProfitShares(state) {
   const stateRef = useRef(state);
@@ -29,10 +30,17 @@ export function useLiveProfitShares(state) {
         const livePlayers = current.players.filter((player) =>
           isProfitShareActive(player.profitShare),
         );
+        const now = new Date();
+        const teamDailyBoard = buildTeamDailyBoard(current, now);
         await Promise.allSettled(
           livePlayers.map((player) =>
             syncLiveProfitShare(
-              buildPlayerProfitSnapshot(player, current),
+              buildPlayerProfitSnapshot(
+                player,
+                current,
+                now,
+                teamDailyBoard,
+              ),
               player.profitShare,
             ),
           ),

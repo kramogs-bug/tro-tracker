@@ -11,6 +11,7 @@ import {
   enableProfitSubmissions,
 } from "./profitSubmissions.js";
 import { supabase } from "./supabaseClient.js";
+import { buildTeamDailyBoard } from "./teamBoardAnalytics.js";
 
 const SUMMARY_KEYS = [
   "gralats",
@@ -163,7 +164,12 @@ export function buildPlayerBalanceAnalytics(
   };
 }
 
-export function buildPlayerProfitSnapshot(player, state, now = new Date()) {
+export function buildPlayerProfitSnapshot(
+  player,
+  state,
+  now = new Date(),
+  teamDailyBoard = buildTeamDailyBoard(state, now),
+) {
   const settings = player.settings || state.settings;
   const transactions = transactionsForPlayer(state, player.id);
   const cashouts = (state.cashouts || []).filter(
@@ -239,6 +245,13 @@ export function buildPlayerProfitSnapshot(player, state, now = new Date()) {
       php: roundMoney(allTime.netPhp - totalCashoutPhp),
       tro: allTime.netTro - totalCashoutTro,
     },
+    teamDaily: teamDailyBoard.map((entry) => ({
+      name: entry.name,
+      netPhp: entry.netPhp,
+      netTro: entry.netTro,
+      isCurrent: entry.playerKey === player.id,
+    })),
+    teamPlayerCount: state.players.length,
     dailyChangeRatio: gainChangeRatio(
       periods.daily.netPhp,
       yesterdaySummary.netPhp,
@@ -358,6 +371,21 @@ function sanitizeProfitSnapshot(parsed) {
       php: Number(parsed.balance?.php) || 0,
       tro: Number(parsed.balance?.tro) || 0,
     },
+    teamDaily: Array.isArray(parsed.teamDaily)
+      ? parsed.teamDaily.slice(0, 100).map((entry) => ({
+          name:
+            typeof entry?.name === "string"
+              ? entry.name.trim().slice(0, 50)
+              : "Player",
+          netPhp: Number(entry?.netPhp) || 0,
+          netTro: Number(entry?.netTro) || 0,
+          isCurrent: Boolean(entry?.isCurrent),
+        }))
+      : [],
+    teamPlayerCount: Math.max(
+      0,
+      Math.min(1000, Math.floor(Number(parsed.teamPlayerCount) || 0)),
+    ),
     dailyChangeRatio:
       parsed.dailyChangeRatio === null
         ? null

@@ -17,6 +17,10 @@ import {
 import { SharedProfitSummary } from "./ProfitInsights.jsx";
 import ReferenceImagePanel from "./ReferenceImagePanel.jsx";
 import {
+  OwnerTeamNotesPanel,
+  PlayerTeamBoard,
+} from "./TeamBoard.jsx";
+import {
   createSubmissionTransactions,
   estimateSubmission,
   findDuplicateBatch,
@@ -420,7 +424,7 @@ export function SharedPlayerPortal({
     <main className="min-h-screen bg-[#E6F2DD] text-[#29453E]">
       <div className="mx-auto max-w-5xl px-4 pt-5">
         <div
-          className="grid grid-cols-2 gap-2 rounded-2xl border border-[#B1D3B9] bg-white p-2"
+          className="grid grid-cols-3 gap-2 rounded-2xl border border-[#B1D3B9] bg-white p-2"
           role="tablist"
           aria-label="Player profit portal"
         >
@@ -436,6 +440,19 @@ export function SharedPlayerPortal({
             }`}
           >
             Profit summary
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "team"}
+            onClick={() => setActiveTab("team")}
+            className={`rounded-xl px-2 py-3 text-sm font-bold sm:px-4 ${
+              activeTab === "team"
+                ? "bg-[#527A70] text-white"
+                : "text-[#527A70]"
+            }`}
+          >
+            Team board
           </button>
           <button
             type="button"
@@ -470,6 +487,12 @@ export function SharedPlayerPortal({
           pendingSummary={projection.pendingSummary}
           pendingCount={projection.pendingCount}
           embedded
+        />
+      ) : activeTab === "team" ? (
+        <PlayerTeamBoard
+          snapshot={snapshot}
+          shareId={shareId}
+          submissionToken={submissionToken}
         />
       ) : (
         <PlayerSubmissionForm
@@ -1047,6 +1070,7 @@ export function PlayerSubmissionsTab({
           </div>
         </section>
       ) : null}
+      <OwnerTeamNotesPanel players={state.players} />
     </section>
   );
 }
