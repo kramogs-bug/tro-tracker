@@ -5,6 +5,7 @@ import {
   syncLiveProfitShare,
 } from "./profitAnalytics.js";
 import { buildTeamDailyBoard } from "./teamBoardAnalytics.js";
+import { buildAllPlayerPeriodRecaps } from "./periodRecaps.js";
 
 export function useLiveProfitShares(state) {
   const stateRef = useRef(state);
@@ -32,6 +33,10 @@ export function useLiveProfitShares(state) {
         );
         const now = new Date();
         const teamDailyBoard = buildTeamDailyBoard(current, now);
+        const periodRecapsByPlayer = buildAllPlayerPeriodRecaps(
+          current,
+          now,
+        );
         await Promise.allSettled(
           livePlayers.map((player) =>
             syncLiveProfitShare(
@@ -40,6 +45,7 @@ export function useLiveProfitShares(state) {
                 current,
                 now,
                 teamDailyBoard,
+                periodRecapsByPlayer.get(player.id),
               ),
               player.profitShare,
             ),

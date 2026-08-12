@@ -20,6 +20,7 @@ import {
   postPlayerTeamNote,
 } from "./teamNotes.js";
 import { format } from "./tracker.js";
+import { RecapArchive } from "./PeriodRecap.jsx";
 
 const softButton =
   "inline-flex items-center justify-center gap-2 rounded-xl border border-[#B1D3B9] bg-white px-3 py-2 text-xs font-bold text-[#527A70] hover:bg-[#F2F8ED] disabled:cursor-not-allowed disabled:opacity-60";
@@ -351,9 +352,15 @@ function TeamNotes({ shareId, submissionToken }) {
   );
 }
 
-export function PlayerTeamBoard({ snapshot, shareId, submissionToken }) {
+export function PlayerTeamBoard({
+  snapshot,
+  shareId,
+  submissionToken,
+  onOpenRecap,
+}) {
   return (
     <div className="mx-auto grid max-w-5xl gap-5 px-4 pb-8 pt-5">
+      <RecapArchive recaps={snapshot.recaps} onOpen={onOpenRecap} />
       <PlayerDailyRows snapshot={snapshot} />
       <TeamNotes shareId={shareId} submissionToken={submissionToken} />
     </div>

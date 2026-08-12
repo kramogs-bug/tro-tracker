@@ -7,6 +7,7 @@ import {
   Calculator,
   Cloud,
   CloudOff,
+  ClipboardPaste,
   Copy,
   Download,
   FileDown,
@@ -20,6 +21,7 @@ import {
   Save,
   Settings,
   Share2,
+  Split,
   Trash2,
   Upload,
   UserPlus,
@@ -35,6 +37,20 @@ import {
 } from "./PlayerSubmissions.jsx";
 import ReferenceImagePanel from "./ReferenceImagePanel.jsx";
 import TradeScreenshotScanner from "./TradeScreenshotScanner.jsx";
+import {
+  BatchAllocationModal,
+  PasteBatchModal,
+} from "./BatchActions.jsx";
+import ProfitAllocationEditor from "./ProfitAllocationEditor.jsx";
+import {
+  allocateBatchRecords,
+  allocationPercentForEntry,
+  applyBatchAllocations,
+  defaultProfitAllocations,
+  rememberCopiedBatchLog,
+  replaceAllocationGroupTemplate,
+  serializeBatchLog,
+} from "./allocationUtils.js";
 import {
   PlayerBalanceOverview,
   SharedProfitSummary,
@@ -486,6 +502,13 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
       const key = `${entry.type}:${entry.itemName}`;
       if (!existing.has(key)) existing.set(key, entry);
     });
+    const preservedMetadata = {
+      sourceSubmissionId: batch[0].sourceSubmissionId || null,
+      allocationPercent: allocationPercentForEntry(batch[0]),
+      allocationGroupId: batch[0].allocationGroupId || null,
+      allocationOriginPlayerId: batch[0].allocationOriginPlayerId || null,
+      copiedFromBatchId: batch[0].copiedFromBatchId || null,
+    };
     const shellRecords = SHELL_ITEMS.flatMap((item) => {
       const quantity = parsedQuantities[item.name] || 0;
       if (!quantity) return [];
@@ -503,6 +526,7 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
           note: previous?.note || "",
           createdAt,
           ratios: savedRatios,
+          ...preservedMetadata,
         },
       ];
     });
@@ -522,6 +546,7 @@ function EditBatchModal({ batch, player, onSave, onClose }) {
               note: previousShovel?.note || "",
               createdAt,
               ratios: savedRatios,
+              ...preservedMetadata,
             },
           ]
         : [];
@@ -1275,11 +1300,19 @@ function PlayerCalculator({
   const [shovels, setShovels] = useState("");
   const [entryTimestamp, setEntryTimestamp] = useState(localDateTimeInput);
   const [editingBatchId, setEditingBatchId] = useState(null);
+  const [allocatingBatchId, setAllocatingBatchId] = useState(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [allocations, setAllocations] = useState(() =>
+    defaultProfitAllocations(player.id),
+  );
   const [activeTab, setActiveTab] = useState("calculator");
   const [feedback, setFeedback] = useState("");
   const [duplicateConfirmedSignature, setDuplicateConfirmedSignature] =
     useState("");
   const [referenceResetKey, setReferenceResetKey] = useState(0);
+  useEffect(() => {
+    setAllocations(defaultProfitAllocations(player.id));
+  }, [player.id]);
   const firstInputAt = useMemo(
     () => playerFirstInputAt(rawState.transactions, player.id),
     [player.id, rawState.transactions],
@@ -1315,6 +1348,8 @@ function PlayerCalculator({
   );
   const previewTro = previewGralats / entrySettings.gralatsPerTro;
   const previewDeduction = (parsedShovels || 0) * entrySettings.shovelTro;
+  const previewNetTro = previewTro - previewDeduction;
+  const previewNetPhp = toPhp(previewNetTro, entrySettings);
   const currentQuantitySignature = quantitySignature(
     parsedQuantities,
     parsedShovels,
@@ -1393,15 +1428,21 @@ function PlayerCalculator({
       );
       return;
     }
+    const allocatedRecords = allocateBatchRecords(
+      [...shellRecords, ...shovelRecord],
+      allocations,
+      { originPlayerId: player.id },
+    );
     setState((current) => ({
       ...current,
-      transactions: [...shellRecords, ...shovelRecord, ...current.transactions],
+      transactions: [...allocatedRecords, ...current.transactions],
     }));
     setQuantities(emptyQuantities());
     setShovels("");
     setEntryTimestamp(localDateTimeInput());
     setDuplicateConfirmedSignature("");
     setReferenceResetKey((current) => current + 1);
+    setAllocations(defaultProfitAllocations(player.id));
     setFeedback(`Saved: ${displayTimestamp(timestamp)}`);
   };
   const batches = Array.from(
@@ -1416,19 +1457,37 @@ function PlayerCalculator({
   );
   const editingBatch =
     batches.find((batch) => batch[0].batchId === editingBatchId) || null;
+  const allocatingBatch =
+    batches.find((batch) => batch[0].batchId === allocatingBatchId) || null;
   const replaceBatch = (nextRecords) => {
     setState((current) => ({
       ...current,
-      transactions: [
-        ...nextRecords,
-        ...current.transactions.filter(
-          (entry) =>
-            entry.playerId !== player.id || entry.batchId !== editingBatchId,
-        ),
-      ],
+      transactions: replaceAllocationGroupTemplate(
+        current.transactions,
+        editingBatch,
+        nextRecords,
+      ),
     }));
     setEditingBatchId(null);
     setFeedback("Saved entry updated.");
+  };
+  const copyBatchLog = async (batch) => {
+    try {
+      const value = serializeBatchLog(batch, player);
+      rememberCopiedBatchLog(value);
+      try {
+        await copyText(value);
+        setFeedback(
+          "Saved log copied. Open another player and choose Paste log.",
+        );
+      } catch {
+        setFeedback(
+          "Saved log is ready inside the tracker. Open another player and choose Paste log.",
+        );
+      }
+    } catch (error) {
+      setFeedback(error.message || "Could not copy this saved log.");
+    }
   };
   if (activeTab === "profit") {
     return (
@@ -1511,11 +1570,18 @@ function PlayerCalculator({
                   }
                 : currentPlayer,
             ),
-            transactions: current.transactions.map((entry) =>
-              entry.playerId === player.id && entry.date === entryDate
+            transactions: current.transactions.map((entry) => {
+              const isIndependentPlayerEntry =
+                entry.playerId === player.id &&
+                (!entry.allocationGroupId ||
+                  entry.allocationOriginPlayerId === player.id);
+              const isLinkedFromPlayer =
+                entry.allocationOriginPlayerId === player.id;
+              return entry.date === entryDate &&
+                (isIndependentPlayerEntry || isLinkedFromPlayer)
                 ? { ...entry, ratios: settings }
-                : entry,
-            ),
+                : entry;
+            }),
             cashouts: (current.cashouts || []).map((cashout) =>
               cashout.playerId === player.id && cashout.date === entryDate
                 ? { ...cashout, ratios: settings }
@@ -1590,6 +1656,16 @@ function PlayerCalculator({
               aria-label="Shovel quantity"
             />
           </label>
+          <div className="mt-4">
+            <ProfitAllocationEditor
+              players={rawState.players}
+              sourcePlayerId={player.id}
+              allocations={allocations}
+              onChange={setAllocations}
+              netTro={previewNetTro}
+              netPhp={previewNetPhp}
+            />
+          </div>
           {duplicateMatch ? (
             <p
               className={`mt-4 flex items-start gap-2 rounded-xl p-3 text-sm font-bold ${
@@ -1629,10 +1705,10 @@ function PlayerCalculator({
           </p>
           <p className="text-red-100">−{format(previewDeduction)} shovel TRO</p>
           <p className="mt-3 text-2xl font-bold">
-            {format(previewTro - previewDeduction)} net TRO
+            {format(previewNetTro)} net TRO
           </p>
           <p className="mt-1">
-            ₱{format(toPhp(previewTro - previewDeduction, entrySettings))}
+            ₱{format(previewNetPhp)}
           </p>
         </aside>
       </section>
@@ -1719,7 +1795,21 @@ function PlayerCalculator({
         />
       </div>
       <section className="mt-8">
-        <h2 className="text-xl font-bold">Saved timestamps</h2>
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div>
+            <h2 className="text-xl font-bold">Saved timestamps</h2>
+            <p className="mt-1 text-xs text-[#659287]">
+              Copy a validated log, then paste it under another player.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPasteOpen(true)}
+            className={soft}
+          >
+            <ClipboardPaste size={16} /> Paste log
+          </button>
+        </div>
         <div className="mt-4 space-y-3">
           {batches.map((batch) => {
             const summary = summarize(batch, playerSettings);
@@ -1735,6 +1825,12 @@ function PlayerCalculator({
                   {batch[0].sourceSubmissionId ? (
                     <span className="ml-2 inline-flex rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-800">
                       Approved player input
+                    </span>
+                  ) : null}
+                  {allocationPercentForEntry(batch[0]) !== 100 ||
+                  batch[0].allocationGroupId ? (
+                    <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                      {allocationPercentForEntry(batch[0])}% allocated
                     </span>
                   ) : null}
                   <p className="mt-1 text-xs font-bold text-[#527A70]">
@@ -1768,6 +1864,24 @@ function PlayerCalculator({
                   </span>
                   <button
                     type="button"
+                    onClick={() => void copyBatchLog(batch)}
+                    className="rounded-lg bg-[#E6F2DD] p-2 text-[#527A70]"
+                    aria-label="Copy saved log"
+                    title="Copy saved log"
+                  >
+                    <Copy size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllocatingBatchId(batch[0].batchId)}
+                    className="rounded-lg bg-amber-50 p-2 text-amber-800"
+                    aria-label="Move or split profit"
+                    title="Move or split profit"
+                  >
+                    <Split size={15} />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setEditingBatchId(batch[0].batchId)}
                     className="rounded-lg bg-[#E6F2DD] p-2 text-[#527A70]"
                     aria-label="Edit saved entry"
@@ -1775,17 +1889,22 @@ function PlayerCalculator({
                     <Pencil size={15} />
                   </button>
                   <button
-                    onClick={() =>
-                      confirm("Delete this saved entry?") &&
+                    onClick={() => {
+                      const allocationGroupId = batch[0].allocationGroupId;
+                      const message = allocationGroupId
+                        ? "Delete this linked allocation for every player?"
+                        : "Delete this saved entry?";
+                      if (!confirm(message)) return;
                       setState((current) => ({
                         ...current,
-                        transactions: current.transactions.filter(
-                          (entry) =>
-                            entry.batchId !== batch[0].batchId ||
-                            entry.playerId !== player.id,
+                        transactions: current.transactions.filter((entry) =>
+                          allocationGroupId
+                            ? entry.allocationGroupId !== allocationGroupId
+                            : entry.batchId !== batch[0].batchId ||
+                              entry.playerId !== player.id,
                         ),
-                      }))
-                    }
+                      }));
+                    }}
                     className="rounded-lg bg-red-50 p-2 text-red-700"
                     aria-label="Delete timestamp"
                   >
@@ -1809,6 +1928,44 @@ function PlayerCalculator({
           player={player}
           onSave={replaceBatch}
           onClose={() => setEditingBatchId(null)}
+        />
+      ) : null}
+      {allocatingBatch ? (
+        <BatchAllocationModal
+          key={allocatingBatch[0].batchId}
+          batch={allocatingBatch}
+          transactions={rawState.transactions}
+          players={rawState.players}
+          settings={playerSettings}
+          onSave={(nextAllocations) => {
+            setState((current) => ({
+              ...current,
+              transactions: applyBatchAllocations(
+                current.transactions,
+                allocatingBatch,
+                nextAllocations,
+              ),
+            }));
+            setAllocatingBatchId(null);
+            setFeedback("Linked profit allocation saved.");
+          }}
+          onClose={() => setAllocatingBatchId(null)}
+        />
+      ) : null}
+      {pasteOpen ? (
+        <PasteBatchModal
+          player={player}
+          transactions={rawState.transactions}
+          settings={playerSettings}
+          onSave={(nextRecords) => {
+            setState((current) => ({
+              ...current,
+              transactions: [...nextRecords, ...current.transactions],
+            }));
+            setPasteOpen(false);
+            setFeedback("Copied log saved as a new 100% entry.");
+          }}
+          onClose={() => setPasteOpen(false)}
         />
       ) : null}
     </>

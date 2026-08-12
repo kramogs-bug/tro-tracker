@@ -83,6 +83,8 @@ export function findDuplicateBatch(
       .filter(
         (entry) =>
           entry.playerId === playerId &&
+          (entry.allocationPercent === undefined ||
+            Number(entry.allocationPercent) > 0) &&
           (!excludeSourceSubmissionId ||
             entry.sourceSubmissionId !== excludeSourceSubmissionId),
       )

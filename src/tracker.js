@@ -212,6 +212,13 @@ export function normalizeState(value) {
         .map((t) => {
           const createdAt = t.createdAt || new Date().toISOString();
           const player = playersById.get(t.playerId);
+          const allocationPercent = Number(t.allocationPercent);
+          const safeAllocationPercent = Number.isFinite(allocationPercent)
+            ? Math.min(
+                100,
+                Math.max(0, Math.round(allocationPercent * 10) / 10),
+              )
+            : 100;
           return {
             id: String(t.id),
             batchId: String(t.batchId || `${t.playerId}:${createdAt}`),
@@ -229,6 +236,16 @@ export function normalizeState(value) {
             ),
             sourceSubmissionId: t.sourceSubmissionId
               ? String(t.sourceSubmissionId).slice(0, 128)
+              : null,
+            allocationPercent: safeAllocationPercent,
+            allocationGroupId: t.allocationGroupId
+              ? String(t.allocationGroupId).slice(0, 160)
+              : null,
+            allocationOriginPlayerId: ids.has(t.allocationOriginPlayerId)
+              ? t.allocationOriginPlayerId
+              : null,
+            copiedFromBatchId: t.copiedFromBatchId
+              ? String(t.copiedFromBatchId).slice(0, 160)
               : null,
           };
         })
@@ -307,14 +324,23 @@ export function normalizeState(value) {
 
 export function transactionValues(t, settings) {
   const ratios = transactionRatios(t, settings);
-  const gralats = t.type === "sellable" ? t.quantity * t.unitPrice : 0;
+  const allocationPercent = Number(t.allocationPercent);
+  const allocationRate =
+    (Number.isFinite(allocationPercent)
+      ? Math.min(100, Math.max(0, allocationPercent))
+      : 100) / 100;
+  const gralats =
+    t.type === "sellable" ? t.quantity * t.unitPrice * allocationRate : 0;
   const grossTro =
     t.type === "sellable"
       ? gralats / ratios.gralatsPerTro
       : t.type === "tro"
-        ? t.quantity
+        ? t.quantity * allocationRate
         : 0;
-  const deduction = t.type === "shovel" ? t.quantity * ratios.shovelTro : 0;
+  const deduction =
+    t.type === "shovel"
+      ? t.quantity * ratios.shovelTro * allocationRate
+      : 0;
   const netTro = grossTro - deduction;
   return {
     gralats,
@@ -325,6 +351,7 @@ export function transactionValues(t, settings) {
     deductionPhp: toPhp(deduction, ratios),
     netPhp: toPhp(netTro, ratios),
     ratios,
+    allocationPercent: allocationRate * 100,
   };
 }
 
@@ -334,7 +361,10 @@ export function summarize(transactions, settings) {
       const value = transactionValues(t, settings);
       sum.gralats += value.gralats;
       sum.grossTro += value.grossTro;
-      sum.shovels += t.type === "shovel" ? t.quantity : 0;
+      sum.shovels +=
+        t.type === "shovel"
+          ? t.quantity * (value.allocationPercent / 100)
+          : 0;
       sum.deduction += value.deduction;
       sum.netTro += value.netTro;
       sum.grossPhp += value.grossPhp;
@@ -426,6 +456,9 @@ export function exportCsv(state) {
       "TRO per shovel",
       "TRO amount",
       "PHP amount",
+      "Allocation percent",
+      "Allocation group",
+      "Copied from batch",
     ],
   ];
   state.transactions.forEach((t) => {
@@ -449,6 +482,9 @@ export function exportCsv(state) {
       v.ratios.shovelTro,
       v.ratios.phpTro,
       v.ratios.phpAmount,
+      v.allocationPercent,
+      t.allocationGroupId || "",
+      t.copiedFromBatchId || "",
     ]);
   });
   (state.cashouts || []).forEach((cashout) => {
@@ -474,6 +510,9 @@ export function exportCsv(state) {
       ratios.shovelTro,
       ratios.phpTro,
       ratios.phpAmount,
+      "",
+      "",
+      "",
     ]);
   });
   return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");

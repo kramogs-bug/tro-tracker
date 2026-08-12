@@ -16,6 +16,13 @@ import {
 } from "lucide-react";
 import { SharedProfitSummary } from "./ProfitInsights.jsx";
 import ReferenceImagePanel from "./ReferenceImagePanel.jsx";
+import ProfitAllocationEditor from "./ProfitAllocationEditor.jsx";
+import {
+  allocateBatchRecords,
+  defaultProfitAllocations,
+} from "./allocationUtils.js";
+import { PeriodRecapModal } from "./PeriodRecap.jsx";
+import { markRecapSeen, wasRecapSeen } from "./recapStorage.js";
 import {
   OwnerTeamNotesPanel,
   PlayerTeamBoard,
@@ -381,6 +388,21 @@ export function SharedPlayerPortal({
   const [activeTab, setActiveTab] = useState("summary");
   const [submissions, setSubmissions] = useState([]);
   const [status, setStatus] = useState("loading");
+  const [activeRecap, setActiveRecap] = useState(null);
+  const monthlyRecap = snapshot.recaps?.monthly || null;
+  const weeklyRecap = snapshot.recaps?.weekly || null;
+
+  useEffect(() => {
+    const available = [monthlyRecap, weeklyRecap].filter(Boolean);
+    const unseen = available
+      .find((recap) => !wasRecapSeen(shareId, recap.key));
+    if (unseen) {
+      available
+        .filter((recap) => recap.key !== unseen.key)
+        .forEach((recap) => markRecapSeen(shareId, recap.key));
+      setActiveRecap((current) => current || unseen);
+    }
+  }, [monthlyRecap, shareId, weeklyRecap]);
 
   const refresh = useCallback(async () => {
     if (!navigator.onLine) return false;
@@ -493,6 +515,7 @@ export function SharedPlayerPortal({
           snapshot={snapshot}
           shareId={shareId}
           submissionToken={submissionToken}
+          onOpenRecap={setActiveRecap}
         />
       ) : (
         <PlayerSubmissionForm
@@ -503,6 +526,16 @@ export function SharedPlayerPortal({
           onSubmitted={refresh}
         />
       )}
+      {activeRecap ? (
+        <PeriodRecapModal
+          recap={activeRecap}
+          playerName={snapshot.player.name}
+          onClose={() => {
+            markRecapSeen(shareId, activeRecap.key);
+            setActiveRecap(null);
+          }}
+        />
+      ) : null}
     </main>
   );
 }
@@ -644,6 +677,9 @@ function SubmissionReviewCard({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [allocations, setAllocations] = useState(() =>
+    defaultProfitAllocations(player.id),
+  );
 
   const parsedQuantities = normalizeQuantities(quantities);
   const parsedShovels = Math.max(0, Math.floor(Number(shovels) || 0));
@@ -683,6 +719,31 @@ function SubmissionReviewCard({
       setFeedback("Approved entry cannot be empty.");
       return;
     }
+    const allocatedTransactions = allocateBatchRecords(
+      transactions,
+      allocations,
+      { originPlayerId: player.id },
+    );
+    const creditedRows = allocations.filter(
+      (allocation) => Number(allocation.percent) > 0,
+    );
+    const allocationReviewNote =
+      creditedRows.length === 1 &&
+      creditedRows[0].playerId === player.id &&
+      Number(creditedRows[0].percent) === 100
+        ? ""
+        : `Profit allocation: ${creditedRows
+            .map((allocation) => {
+              const creditedPlayer = state.players.find(
+                (entry) => entry.id === allocation.playerId,
+              );
+              return `${creditedPlayer?.name || "Player"} ${allocation.percent}%`;
+            })
+            .join(", ")}`;
+    const finalReviewNote = [reviewNote.trim(), allocationReviewNote]
+      .filter(Boolean)
+      .join(" · ")
+      .slice(0, 200);
     setBusy("approve");
     setFeedback("Saving approved entry to your cloud tracker…");
     try {
@@ -692,7 +753,10 @@ function SubmissionReviewCard({
         }
         return {
           ...current,
-          transactions: [...transactions, ...current.transactions],
+          transactions: [
+            ...allocatedTransactions,
+            ...current.transactions,
+          ],
         };
       });
       if (!committed) {
@@ -703,7 +767,7 @@ function SubmissionReviewCard({
       await reviewProfitSubmission({
         submissionId: submission.id,
         status: "approved",
-        reviewNote,
+        reviewNote: finalReviewNote,
         quantities: parsedQuantities,
         shovels: parsedShovels,
         entryDate,
@@ -854,6 +918,22 @@ function SubmissionReviewCard({
           </strong>
         </div>
       </div>
+
+      {submission.status === "pending" && !alreadyApplied ? (
+        <div className="mt-4">
+          <ProfitAllocationEditor
+            players={state.players}
+            sourcePlayerId={player.id}
+            allocations={allocations}
+            onChange={setAllocations}
+            netTro={estimate.netTro}
+            netPhp={estimate.netPhp}
+            title="Allocation when approved"
+            description="Keep 100% for this player, or move/split the confirmed profit before approval."
+            compact
+          />
+        </div>
+      ) : null}
 
       {duplicate ? (
         <p
