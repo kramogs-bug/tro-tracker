@@ -12,6 +12,7 @@ import {
 } from "./profitSubmissions.js";
 import { supabase } from "./supabaseClient.js";
 import { buildTeamDailyBoard } from "./teamBoardAnalytics.js";
+import { buildPlayerPeriodRecaps } from "./periodRecaps.js";
 
 const SUMMARY_KEYS = [
   "gralats",
@@ -169,6 +170,7 @@ export function buildPlayerProfitSnapshot(
   state,
   now = new Date(),
   teamDailyBoard = buildTeamDailyBoard(state, now),
+  periodRecaps = buildPlayerPeriodRecaps(state, player.id, now),
 ) {
   const settings = player.settings || state.settings;
   const transactions = transactionsForPlayer(state, player.id);
@@ -252,6 +254,7 @@ export function buildPlayerProfitSnapshot(
       isCurrent: entry.playerKey === player.id,
     })),
     teamPlayerCount: state.players.length,
+    recaps: periodRecaps,
     dailyChangeRatio: gainChangeRatio(
       periods.daily.netPhp,
       yesterdaySummary.netPhp,
@@ -385,6 +388,51 @@ function sanitizeProfitSnapshot(parsed) {
     teamPlayerCount: Math.max(
       0,
       Math.min(1000, Math.floor(Number(parsed.teamPlayerCount) || 0)),
+    ),
+    recaps: Object.fromEntries(
+      ["weekly", "monthly"].map((kind) => {
+        const recap = parsed.recaps?.[kind];
+        if (
+          !recap ||
+          recap.kind !== kind ||
+          typeof recap.key !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(recap.start || "") ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(recap.end || "")
+        ) {
+          return [kind, null];
+        }
+        return [
+          kind,
+          {
+            kind,
+            key: recap.key.slice(0, 80),
+            start: recap.start,
+            end: recap.end,
+            netPhp: Number(recap.netPhp) || 0,
+            netTro: Number(recap.netTro) || 0,
+            rank: Math.max(1, Math.floor(Number(recap.rank) || 1)),
+            playerCount: Math.max(
+              1,
+              Math.floor(Number(recap.playerCount) || 1),
+            ),
+            activeDays: Math.max(
+              0,
+              Math.floor(Number(recap.activeDays) || 0),
+            ),
+            changeRatio:
+              recap.changeRatio === null
+                ? null
+                : Number(recap.changeRatio) || 0,
+            previousNetPhp: Number(recap.previousNetPhp) || 0,
+            teamNetPhp: Number(recap.teamNetPhp) || 0,
+            nextRankGapPhp: Math.max(
+              0,
+              Number(recap.nextRankGapPhp) || 0,
+            ),
+            badge: String(recap.badge || "Mission Complete").slice(0, 40),
+          },
+        ];
+      }),
     ),
     dailyChangeRatio:
       parsed.dailyChangeRatio === null
