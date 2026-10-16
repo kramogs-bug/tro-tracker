@@ -49,6 +49,34 @@ export function cashoutRatios(cashout, fallback = DEFAULT_SETTINGS) {
   return normalizeSettings(cashout?.ratios, fallback);
 }
 
+export function applyRatiosToAllPlayers(
+  state,
+  settings,
+  date = localDate(),
+) {
+  const nextSettings = normalizeSettings(settings, state?.settings);
+  return {
+    ...state,
+    settings: nextSettings,
+    players: state.players.map((player) => ({
+      ...player,
+      settings: { ...nextSettings },
+      ratioHistory: {
+        ...(player.ratioHistory || {}),
+        [date]: { ...nextSettings },
+      },
+    })),
+    transactions: state.transactions.map((entry) =>
+      entry.date === date ? { ...entry, ratios: { ...nextSettings } } : entry,
+    ),
+    cashouts: (state.cashouts || []).map((cashout) =>
+      cashout.date === date
+        ? { ...cashout, ratios: { ...nextSettings } }
+        : cashout,
+    ),
+  };
+}
+
 export function createId() {
   return (
     globalThis.crypto?.randomUUID?.() ||

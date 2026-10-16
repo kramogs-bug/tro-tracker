@@ -74,6 +74,7 @@ import {
 } from "./entryUtils.js";
 import { readPlayerSubmissionToken } from "./profitSubmissions.js";
 import {
+  applyRatiosToAllPlayers,
   cashoutRatios,
   createId,
   exportBackup,
@@ -326,7 +327,7 @@ function RatioForm({ settings, onSave, onClose }) {
     </label>
   );
   return (
-    <Modal title="Conversion ratios" onClose={onClose}>
+    <Modal title="Ratios for all players" onClose={onClose}>
       <form
         className="mt-5"
         onSubmit={(event) => {
@@ -337,6 +338,10 @@ function RatioForm({ settings, onSave, onClose }) {
           if (Object.values(next).every((value) => value > 0)) onSave(next);
         }}
       >
+        <p className="mb-4 rounded-xl bg-[#E6F2DD] p-3 text-sm text-[#527A70]">
+          One save updates today&apos;s ratio for every player and recalculates
+          today&apos;s saved entries and cashouts. Older dates stay unchanged.
+        </p>
         <div className="grid grid-cols-2 gap-4">
           {field("gralatsPerTro", "Gralats per TRO")}
           {field("shovelTro", "TRO per shovel")}
@@ -347,7 +352,7 @@ function RatioForm({ settings, onSave, onClose }) {
           <button type="button" onClick={onClose} className={soft}>
             Cancel
           </button>
-          <button className={primary}>Save</button>
+          <button className={primary}>Apply to all players</button>
         </div>
       </form>
     </Modal>
@@ -2143,7 +2148,7 @@ function TrackerApp() {
             {!selected && mainTab === "tracker" ? (
               <button onClick={() => setModal("ratios")} className={soft}>
                 <Settings size={17} />
-                <span className="hidden md:inline">Default ratios</span>
+                <span className="hidden md:inline">All-player ratios</span>
               </button>
             ) : null}
           </div>
@@ -2358,19 +2363,10 @@ function TrackerApp() {
       ) : null}
       {modal === "ratios" ? (
         <RatioForm
-          settings={selected?.settings || state.settings}
+          settings={state.settings}
           onSave={(settings) => {
             setState((current) =>
-              selected
-                ? {
-                    ...current,
-                    players: current.players.map((player) =>
-                      player.id === selected.id
-                        ? { ...player, settings }
-                        : player,
-                    ),
-                  }
-                : { ...current, settings },
+              applyRatiosToAllPlayers(current, settings),
             );
             setModal(null);
           }}
