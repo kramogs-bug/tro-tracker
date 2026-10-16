@@ -66,14 +66,6 @@ export function applyRatiosToAllPlayers(
         [date]: { ...nextSettings },
       },
     })),
-    transactions: state.transactions.map((entry) =>
-      entry.date === date ? { ...entry, ratios: { ...nextSettings } } : entry,
-    ),
-    cashouts: (state.cashouts || []).map((cashout) =>
-      cashout.date === date
-        ? { ...cashout, ratios: { ...nextSettings } }
-        : cashout,
-    ),
   };
 }
 

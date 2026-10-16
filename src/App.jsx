@@ -339,8 +339,9 @@ function RatioForm({ settings, onSave, onClose }) {
         }}
       >
         <p className="mb-4 rounded-xl bg-[#E6F2DD] p-3 text-sm text-[#527A70]">
-          One save updates today&apos;s ratio for every player and recalculates
-          today&apos;s saved entries and cashouts. Older dates stay unchanged.
+          One save updates the active ratio for every player. New entries use
+          it from this point forward; saved entries and cashouts keep the ratio
+          they originally used.
         </p>
         <div className="grid grid-cols-2 gap-4">
           {field("gralatsPerTro", "Gralats per TRO")}
@@ -356,6 +357,51 @@ function RatioForm({ settings, onSave, onClose }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+function AllPlayerRatioCard({ settings, playerCount, feedback, onEdit }) {
+  const values = [
+    ["Gralats / TRO", format(settings.gralatsPerTro)],
+    ["TRO / shovel", format(settings.shovelTro)],
+    ["TRO amount", format(settings.phpTro)],
+    ["PHP equivalent", `₱${format(settings.phpAmount)}`],
+  ];
+  return (
+    <section className="mt-6 rounded-2xl border-2 border-[#88BDA4] bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="flex items-center gap-2 font-bold">
+            <Settings size={18} /> Active ratio for new entries
+          </p>
+          <p className="mt-1 text-xs text-[#659287]">
+            Applies to all {playerCount} player{playerCount === 1 ? "" : "s"}.
+            Existing saved entries keep their original ratio.
+          </p>
+        </div>
+        <button type="button" onClick={onEdit} className={primary}>
+          <Settings size={16} /> Change for all players
+        </button>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {values.map(([label, value]) => (
+          <div key={label} className="rounded-xl bg-[#F2F8ED] p-3">
+            <p className="text-xs font-bold uppercase text-[#659287]">
+              {label}
+            </p>
+            <p className="mt-1 text-lg font-bold">{value}</p>
+          </div>
+        ))}
+      </div>
+      {feedback ? (
+        <p
+          className="mt-4 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800"
+          role="status"
+        >
+          {feedback}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -1982,6 +2028,7 @@ function TrackerApp() {
   const [selectedId, setSelectedId] = useState(null);
   const [mainTab, setMainTab] = useState("tracker");
   const [modal, setModal] = useState(null);
+  const [ratioFeedback, setRatioFeedback] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
   const importRef = useRef(null);
   const cloud = useCloudTracker(state, setState);
@@ -2195,6 +2242,12 @@ function TrackerApp() {
                 <UserPlus size={17} /> Add player
               </button>
             </header>
+            <AllPlayerRatioCard
+              settings={state.settings}
+              playerCount={state.players.length}
+              feedback={ratioFeedback}
+              onEdit={() => setModal("ratios")}
+            />
             <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7">
               <Stat
                 label="Players"
@@ -2367,6 +2420,11 @@ function TrackerApp() {
           onSave={(settings) => {
             setState((current) =>
               applyRatiosToAllPlayers(current, settings),
+            );
+            setRatioFeedback(
+              `Active ratio updated for ${state.players.length} player${
+                state.players.length === 1 ? "" : "s"
+              }. New saves will use it; existing records were not changed.`,
             );
             setModal(null);
           }}
